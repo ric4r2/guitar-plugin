@@ -71,6 +71,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
 
         p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { paramId (strip, revTypeId), 1 }, prefix + "Reverb Type",
                                                              StringArray { "Plate", "Spring" }, 0));
+        p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { paramId (strip, ampTypeId), 1 }, prefix + "Amp Model",
+                                                             StringArray { "Deluxe Reverb", "Twin Reverb" }, 0));
 
         // pedals before the amp, and the effects after the equalizer
         addSwitch (p, paramId (strip, Params::wahOn), prefix + "Wah On", false);
@@ -124,6 +126,7 @@ ChannelStrip::Params GuitarDriveProcessor::paramsFor (int strip) const
     p.reverb = own ("reverb");
     p.master = own ("master");
     p.revType = own (revTypeId);
+    p.ampType = own (ampTypeId);
 
     p.wahOn = own ("wah_on");   p.wahAuto = own ("wah_auto");   p.wahPos = own ("wah_pos");
     p.wahSens = own ("wah_sens");   p.wahQ = own ("wah_q");

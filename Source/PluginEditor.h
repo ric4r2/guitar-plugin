@@ -134,6 +134,8 @@ private:
         std::array<KnobUI, numKnobs> knobs;
         juce::TextButton revType { "PLATE" };
         int revState = 0;
+        juce::TextButton ampType { "DELUXE" };
+        int ampState = 0;
     };
 
     struct Group { juce::String title; juce::Rectangle<int> area; };
@@ -150,7 +152,7 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     const juce::Image& logo;
     std::array<Strip, 2> strips;
-    std::array<std::unique_ptr<juce::ParameterAttachment>, 2> revAttach;
+    std::array<std::unique_ptr<juce::ParameterAttachment>, 2> revAttach, ampAttach;
     std::array<Layout, 2> lay;
     juce::Image tweedImage, grilleImage;
     bool stereo = false;

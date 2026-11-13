@@ -5,6 +5,7 @@
 #include <random>
 #include <vector>
 
+#include "AmpModel.h"
 #include "ChannelStrip.h"
 #include "Effects.h"
 #include "Logo.h"
@@ -206,7 +207,8 @@ namespace
     {
         auto harmonic = [] (bool screamer, float drive)
         {
-            auto x = sine (330.0, 0.2f, (int) sr);
+            // a real TS808 already clips a firm note at minimum drive (21.5 dB of gain), so the screamer gets a soft one
+            auto x = sine (330.0, screamer ? 0.02f : 0.2f, (int) sr);
             fx::TubeScreamer ts;
             fx::Overdrive od;
             ts.prepare (sr, 256);
@@ -226,6 +228,32 @@ namespace
             check (screamer ? "tube screamer distorts with drive" : "overdrive distorts with drive",
                    low.second && high.second && high.first > low.first + 10.0, buf);
         }
+
+        // TS808 circuit: small-signal level of one frequency through the pedal
+        auto tsLevel = [] (double f, float drive, float tone)
+        {
+            auto x = sine (f, 0.001f, (int) sr);
+            fx::TubeScreamer ts;
+            ts.prepare (sr, 256);
+            inBlocks (x, 256, [&] (float* d, int n) { ts.process (d, n, drive, tone, 10.0f); });
+            return db (bin (x, 24000, 48000, f) / 0.001);
+        };
+        std::snprintf (buf, sizeof buf, "formula: %.1f dB at drive 0, %.1f dB at drive 10",
+                       db (fx::TubeScreamer::clippingStageGain (0.0f)), db (fx::TubeScreamer::clippingStageGain (10.0f)));
+        check ("TS808 clipping stage gain matches 21.5-41 dB",
+               std::abs (db (fx::TubeScreamer::clippingStageGain (0.0f)) - 21.5) < 0.3 && std::abs (db (fx::TubeScreamer::clippingStageGain (10.0f)) - 41.4) < 0.3, buf);
+
+        const double g0 = tsLevel (2000.0, 0.0f, 5.0f), g10 = tsLevel (2000.0, 10.0f, 5.0f);
+        std::snprintf (buf, sizeof buf, "2 kHz: %.1f dB at drive 0, %.1f dB at drive 10 (circuit predicts ~18.9 dB apart)", g0, g10);
+        check ("TS808 simulation follows the drive range", std::abs ((g10 - g0) - 18.9) < 1.5, buf);
+
+        const double bassLevel = tsLevel (100.0, 5.0f, 5.0f), midLevel = tsLevel (1000.0, 5.0f, 5.0f);
+        std::snprintf (buf, sizeof buf, "drive 5: 100 Hz %.1f dB, 1 kHz %.1f dB", bassLevel, midLevel);
+        check ("TS808 mid hump: bass is not boosted", midLevel > bassLevel + 10.0, buf);
+
+        const double dark = tsLevel (3000.0, 2.0f, 0.0f), bright = tsLevel (3000.0, 2.0f, 10.0f);
+        std::snprintf (buf, sizeof buf, "3 kHz: %.1f dB at tone 0, %.1f dB at tone 10", dark, bright);
+        check ("TS808 tone control range", bright > dark + 20.0, buf);
     }
 
     void testEq()
@@ -498,8 +526,8 @@ namespace
 
             pm.load ("SRV Edge");
             std::snprintf (buf, sizeof buf, "ts_on %.0f, ts_drive %.1f, gain right copy %.1f", proc.get ("ts_on"), proc.get ("ts_drive"), proc.get ("r_gain"));
-            check ("loading a preset applies its values (both channels)", proc.get ("ts_on") > 0.5f && std::abs (proc.get ("ts_drive") - 3.0f) < 0.05f
-                                                                              && std::abs (proc.get ("r_gain") - 5.5f) < 0.05f, buf);
+            check ("loading a preset applies its values (both channels)", proc.get ("ts_on") > 0.5f && std::abs (proc.get ("ts_drive") - 2.0f) < 0.05f
+                                                                              && std::abs (proc.get ("r_gain") - 5.0f) < 0.05f, buf);
             check ("a freshly loaded preset is not marked modified", pm.currentName() == "SRV Edge" && ! pm.isDirty(), "no asterisk");
 
             proc.set ("gain", 8.0f);
@@ -530,7 +558,7 @@ namespace
 
     struct StripFixture
     {
-        std::atomic<float> gate { 0 }, trans { 0 }, gain { 5 }, warmth { 3 }, bass { 5 }, mid { 5 }, treble { 5 }, reverb { 2.5f }, master { 8 }, revType { 0 };
+        std::atomic<float> gate { 0 }, trans { 0 }, gain { 5 }, warmth { 3 }, bass { 5 }, mid { 5 }, treble { 5 }, reverb { 2.5f }, master { 8 }, revType { 0 }, ampType { 0 };
         std::atomic<float> wahOn { 0 }, wahAuto { 0 }, wahPos { 5 }, wahSens { 5 }, wahQ { 5 };
         std::atomic<float> compOn { 0 }, compSustain { 3 }, compAttack { 4 }, compLevel { 5 };
         std::atomic<float> tsOn { 0 }, tsDrive { 2.5f }, tsTone { 5.5f }, tsLevel { 6.5f };
@@ -551,7 +579,7 @@ namespace
             q.dlFb = q.dlTone = q.dlMix = &five;
             q.rvSize = q.rvDamp = q.rvMix = &five;
             p.gate = &gate; p.trans = &trans; p.gain = &gain; p.warmth = &warmth; p.bass = &bass; p.mid = &mid;
-            p.treble = &treble; p.reverb = &reverb; p.master = &master; p.revType = &revType;
+            p.treble = &treble; p.reverb = &reverb; p.master = &master; p.revType = &revType; p.ampType = &ampType;
             p.wahOn = &wahOn; p.wahAuto = &wahAuto; p.wahPos = &wahPos; p.wahSens = &wahSens; p.wahQ = &wahQ;
             p.compOn = &compOn; p.compSustain = &compSustain; p.compAttack = &compAttack; p.compLevel = &compLevel;
             p.tsOn = &tsOn; p.tsDrive = &tsDrive; p.tsTone = &tsTone; p.tsLevel = &tsLevel;
@@ -607,6 +635,88 @@ namespace
         const auto withTs = runStrip (ts);
         std::snprintf (buf, sizeof buf, "clean %.4f, with screamer %.4f (%.1f dB)", res.leftRms, withTs.leftRms, db (withTs.leftRms / std::max (1.0e-9, runStrip (plain).leftRms)));
         check ("strip: screamer default is a gentle push", withTs.finite && db (withTs.leftRms / std::max (1.0e-9, runStrip (plain).leftRms)) < 9.0, buf);
+    }
+}
+
+// ---------------------------------------------------------------- amp circuit
+namespace
+{
+    double thdOfStrip (int model, float volume, float inputPeak)
+    {
+        StripFixture f;
+        f.ampType = (float) model;
+        f.gain = volume;
+        f.reverb = 0.0f;
+        const auto in = sine (220.0, inputPeak, (int) sr);
+        ChannelStrip strip;
+        strip.setParams (f.params());
+        strip.prepare (sr, 256);
+        std::vector<float> l (in.size()), r (in.size());
+        for (size_t s = 0; s < in.size(); s += 256)
+            strip.process (in.data() + s, l.data() + s, r.data() + s, (int) std::min<size_t> (256, in.size() - s));
+        const double fundamental = bin (l, 24000, 48000, 220.0);
+        double h = 0.0;
+        for (int k = 2; k <= 9; ++k)
+            h += std::pow (bin (l, 24000, 48000, 220.0 * k), 2.0);
+        return 100.0 * std::sqrt (h) / std::max (1.0e-12, fundamental);
+    }
+
+    void testAmp()
+    {
+        // 12AX7 stage with the AB763 values: published operating points are about 160-190 V on the plate and a gain of 30-60
+        amp::TriodeStage stage;
+        stage.build (270.0, 100e3, 1.5e3, 12.0);
+        std::snprintf (buf, sizeof buf, "plate %.0f V at rest, gain %.1f (%.1f dB)", stage.getRestPlateVoltage(), stage.getSmallSignalGain(), db (stage.getSmallSignalGain()));
+        check ("12AX7 stage sits at a real operating point", stage.getRestPlateVoltage() > 140.0 && stage.getRestPlateVoltage() < 210.0
+                                                            && stage.getSmallSignalGain() > 30.0 && stage.getSmallSignalGain() < 70.0, buf);
+        std::snprintf (buf, sizeof buf, "+1 V in -> %.1f V, -1 V in -> %.1f V", stage.process (1.0f), stage.process (-1.0f));
+        check ("12AX7 stage inverts the signal", stage.process (1.0f) < 0.0f && stage.process (-1.0f) > 0.0f, buf);
+        std::snprintf (buf, sizeof buf, "+4 V in -> %.1f V, -4 V in -> %.1f V", stage.process (4.0f), stage.process (-4.0f));
+        check ("12AX7 stage clips unevenly when driven hard", std::abs (std::abs (stage.process (4.0f)) - std::abs (stage.process (-4.0f))) > 10.0f, buf);
+
+        // tone stack: the digital filter follows the analog circuit, and has the Fender mid scoop
+        const double osr = sr * 4.0;
+        amp::ToneStack ts;
+        ts.prepare (osr);
+        double worst = 0.0;
+        for (double f = 40.0; f < 8000.0; f *= 1.25)
+            worst = std::max (worst, std::abs (db (ts.digitalMagnitude (f) / ts.analogMagnitude (f))));
+        std::snprintf (buf, sizeof buf, "largest difference %.3f dB, 40 Hz - 8 kHz", worst);
+        check ("tone stack: digital matches the circuit", worst < 0.25, buf);
+
+        const double low = ts.analogMagnitude (100.0), mid = ts.analogMagnitude (500.0), high = ts.analogMagnitude (3000.0);
+        std::snprintf (buf, sizeof buf, "100 Hz %.1f, 500 Hz %.1f, 3 kHz %.1f dB", db (low), db (mid), db (high));
+        check ("tone stack: knobs at 5 scoop the mids", mid < low && mid < high, buf);
+
+        ts.setControls (0.5f, 0.5f, 0.0f);   const double bass0 = ts.analogMagnitude (60.0);
+        ts.setControls (0.5f, 0.5f, 1.0f);   const double bass10 = ts.analogMagnitude (60.0);
+        ts.setControls (0.0f, 0.5f, 0.5f);   const double treble0 = ts.analogMagnitude (3000.0);
+        ts.setControls (1.0f, 0.5f, 0.5f);   const double treble10 = ts.analogMagnitude (3000.0);
+        ts.setControls (0.5f, 0.0f, 0.5f);   const double mid0 = ts.analogMagnitude (600.0);
+        ts.setControls (0.5f, 1.0f, 0.5f);   const double mid10 = ts.analogMagnitude (600.0);
+        std::snprintf (buf, sizeof buf, "bass (60 Hz) %.1f dB, treble (3 kHz) %.1f dB, mid (600 Hz) %.1f dB, 0 to 10",
+                       db (bass10 / bass0), db (treble10 / treble0), db (mid10 / mid0));
+        check ("tone stack: each knob has its range", db (bass10 / bass0) > 8.0 && db (treble10 / treble0) > 10.0 && db (mid10 / mid0) > 4.0, buf);
+
+        std::printf ("      tone stack, Deluxe Reverb at 5/5/5 (dB):");
+        ts.setControls (0.5f, 0.5f, 0.5f);
+        for (double f : { 50.0, 100.0, 200.0, 400.0, 800.0, 1600.0, 3200.0, 6400.0 })
+            std::printf (" %.0f Hz %.1f |", f, db (ts.analogMagnitude (f)));
+        std::printf ("\n");
+
+        // breakup: how distorted a firm single-coil note (0.25 V) is as the volume goes up
+        std::printf ("      distortion (THD %%) of a 0.25 V note by volume:\n");
+        double deluxe[11] {}, twin[11] {};
+        for (int v = 1; v <= 10; ++v)
+        {
+            deluxe[v] = thdOfStrip (0, (float) v, 0.25f);
+            twin[v] = thdOfStrip (1, (float) v, 0.25f);
+            std::printf ("        volume %2d   Deluxe %6.2f   Twin %6.2f\n", v, deluxe[v], twin[v]);
+        }
+        std::snprintf (buf, sizeof buf, "Deluxe %.1f%% at 3, %.1f%% at 10", deluxe[3], deluxe[10]);
+        check ("amp: Deluxe is clean low and breaks up high", deluxe[3] < 2.0 && deluxe[10] > 8.0, buf);
+        std::snprintf (buf, sizeof buf, "volume 6: Deluxe %.1f%%, Twin %.1f%%", deluxe[6], twin[6]);
+        check ("amp: Twin has more clean headroom", twin[6] < deluxe[6], buf);
     }
 }
 
@@ -757,6 +867,7 @@ int main (int argc, char** argv)
     testMetronome();
     testReverbs();
     testStrip();
+    testAmp();
     testPresets();
 
     std::printf ("\n%d failure%s\n", failures, failures == 1 ? "" : "s");

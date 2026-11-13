@@ -42,8 +42,9 @@ build/GuitarDriveTests_artefacts/Release/GuitarDriveTests.exe
 
 ## Layout
 
-- `Source/` the plugin: `ChannelStrip` (per-channel signal chain), `Effects`, `PlateReverb`, `SpringReverb`, `Presets`, the editor and widgets
+- `Source/` the plugin: `ChannelStrip` (per-channel signal chain), `AmpModel` (Fender AB763 amp from its circuit), `Effects`, `PlateReverb`, `SpringReverb`, `Presets`, the editor and widgets
 - `Tests/` the DSP tests
+- `docs/SOUND_MODELS.md` what is simulated from real circuits (amp, TS808), the component values and the sources
 - `Assets/` the logo (embedded in the program)
 
 ## License

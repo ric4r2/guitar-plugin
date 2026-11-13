@@ -135,7 +135,13 @@ namespace fx
         float gr = 0.0f, releaseCoef = 0.0f;
     };
 
-    // Tube Screamer: the clean signal plus a clipped, mid-boosted copy, so the bass stays tight and the pick stays clear.
+    // Ibanez TS808 Tube Screamer, simulated from its circuit:
+    //  - clipping stage: op-amp with 4.7k + 47nF to ground (only the mids and highs get the gain, about 720 Hz up),
+    //    51k + 500k DRIVE pot in the feedback with 51pF and two 1N914 diodes. The diode equation is solved every sample.
+    //    Gain 1 + (51k + drive) / 4.7k = 21.5 dB to 41 dB, as published.
+    //  - R9 1k / C5 0.22uF low-pass at 723 Hz
+    //  - tone stage: at minimum a 400 Hz low-pass, at maximum a shelf rising from 725 Hz to 4 kHz (+14.9 dB)
+    //  - LEVEL: 100k volume pot
     class TubeScreamer
     {
     public:
@@ -143,11 +149,21 @@ namespace fx
         void reset();
         void process (float* x, int n, float driveKnob, float toneKnob, float levelKnob);
 
+        // gain of the clipping stage for small signals well above 720 Hz, from the circuit formula (for tests)
+        static double clippingStageGain (float driveKnob);
+
     private:
-        juce::dsp::Oversampling<float> os { 1, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
-        double osRate = 88200.0;
+        static double driveResistance (float driveKnob);
+        void setTone (float toneKnob);
+
+        juce::dsp::Oversampling<float> os { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };   // 4x
+        double osRate = 176400.0;
         int maxBlock = 512;
-        float lowCoef = 0.0f, low = 0.0f, t1 = 0.0f, t2 = 0.0f;
+        double hpG = 0.0, hpS = 0.0;                                // 4.7k / 47nF leg to ground
+        double vf = 0.0, iPrev = 0.0, fPrev = 0.0, lastRf = 0.0;    // voltage across the feedback network
+        double c5G = 0.0, c5S = 0.0;                                // R9 / C5 low-pass
+        double tb0 = 1.0, tb1 = 0.0, ta1 = 0.0, tz = 0.0;           // tone stage (first-order shelf)
+        float lastTone = -1.0f;
     };
 
     // Overdrive: asymmetric tube-style clipping of the whole signal. Cranked, this is the heavy one.

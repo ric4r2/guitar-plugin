@@ -21,7 +21,7 @@ juce_add_plugin(GuitarDrive
 target_sources(GuitarDrive PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/ChannelStrip.cpp
+    Source/AmpModel.cpp Source/ChannelStrip.cpp
     Source/Effects.cpp
     Source/Presets.cpp)
 
@@ -38,7 +38,7 @@ target_compile_definitions(GuitarDrive PUBLIC
 option(GUITARDRIVE_BUILD_TESTS "Build the offline DSP tests" OFF)
 if(GUITARDRIVE_BUILD_TESTS)
     juce_add_console_app(GuitarDriveTests PRODUCT_NAME "GuitarDriveTests")
-    target_sources(GuitarDriveTests PRIVATE Tests/DspTests.cpp Source/ChannelStrip.cpp Source/Effects.cpp Source/Presets.cpp)
+    target_sources(GuitarDriveTests PRIVATE Tests/DspTests.cpp Source/AmpModel.cpp Source/ChannelStrip.cpp Source/Effects.cpp Source/Presets.cpp)
     target_include_directories(GuitarDriveTests PRIVATE Source)
     target_compile_definitions(GuitarDriveTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
     target_link_libraries(GuitarDriveTests PRIVATE

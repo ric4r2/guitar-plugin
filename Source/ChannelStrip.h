@@ -1,14 +1,16 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
+#include "AmpModel.h"
 #include "Effects.h"
 #include "Params.h"
 #include "PlateReverb.h"
 #include "SpringReverb.h"
 
 // One complete guitar signal path, one per channel:
-// gate -> transposer -> wah -> compressor -> tube screamer -> overdrive -> gain -> tube warmth -> bass/mid/treble
-//      -> reverb -> master -> equalizer -> phaser -> chorus -> tremolo -> delay -> digital reverb.
+// gate -> transposer -> wah -> compressor -> tube screamer -> overdrive
+//      -> amp (12AX7 -> tone stack -> volume -> 12AX7 -> power amp) -> reverb -> speaker -> master
+//      -> equalizer -> phaser -> chorus -> tremolo -> delay -> digital reverb.
 // Mono mode uses one strip; stereo mode runs two, one per input channel, each with its own settings.
 class ChannelStrip
 {
@@ -52,6 +54,7 @@ public:
         const std::atomic<float>* reverb = nullptr;
         const std::atomic<float>* master = nullptr;
         const std::atomic<float>* revType = nullptr;   // 0 = plate, 1 = spring
+        const std::atomic<float>* ampType = nullptr;   // 0 = Deluxe Reverb, 1 = Twin Reverb
 
         // pedals before the amp
         const std::atomic<float>* wahOn = nullptr;
@@ -89,9 +92,6 @@ public:
 private:
     template <typename F>
     void runPedal (fx::PedalSwitch& sw, bool on, float* x, int n, F&& process);
-    void updateToneStack();
-
-    using Filter = juce::dsp::IIR::Filter<float>;
 
     Params params;
     double sr = 44100.0;
@@ -106,13 +106,15 @@ private:
     fx::PedalSwitch wahSwitch, compSwitch, tsSwitch, odSwitch;
     std::vector<float> dryScratch;
 
-    Filter bassFilter, midFilter, trebleFilter;
-    float lastBass = -1.0f, lastMid = -1.0f, lastTreble = -1.0f;
-
-    // Built-in amp voicing, applied after the tone knobs: a gentle low-mid dip and a treble lift, like a real clean amp.
-    // Without it a guitar played straight in sounds heavy at 100-400 Hz even with every knob at 5.
-    Filter voiceMid, voiceTreble;
-    float tightState = 0.0f, tightCoef = 0.0f;               // low cut ahead of the warmth stage
+    // the amp, modelled on its circuit (see AmpModel.h): all of it runs at 4x the sample rate except the speaker
+    void applyAmpModel (int model);
+    amp::TriodeStage v1a, v1b;
+    amp::ToneStack toneStack;
+    amp::PowerAmp powerAmp;
+    amp::Speaker speakerL, speakerR;
+    int ampModel = -1;
+    float baseDrive = 0.125f, outputTrim = 1.0f;
+    float coupleState = 0.0f, coupleCoef = 0.0f;               // coupling capacitor after V1B
     float sendHp1 = 0.0f, sendHp2 = 0.0f, sendHpCoef = 0.0f;   // keeps low-mids out of the reverb
 
     juce::dsp::Oversampling<float> oversampling { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };   // 4x
@@ -120,12 +122,10 @@ private:
     fx::ReverbDuck reverbDuck;
     SpringReverb spring;
     PlateReverb plate;
-    juce::SmoothedValue<float> gainSmooth, warmthSmooth, reverbSmooth, masterSmooth, reverbTypeSmooth;
+    juce::SmoothedValue<float> volumeSmooth, driveSmooth, reverbSmooth, masterSmooth, reverbTypeSmooth;
 
     fx::GraphicEq eq;
     fx::PedalSwitch eqSwitch;
     fx::PostFx post;
     std::vector<float> eqDryL, eqDryR;
-
-    float dcState = 0.0f, dcCoef = 0.0f, toneState = 0.0f;
 };

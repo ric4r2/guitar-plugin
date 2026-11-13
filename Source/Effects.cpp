@@ -324,45 +324,139 @@ namespace fx
 
     // ------------------------------------------------------------ tube screamer
 
+    namespace ts808
+    {
+        constexpr double r6 = 4.7e3, c3 = 47e-9;        // leg to ground
+        constexpr double r4 = 51e3, rDrive = 500e3;     // feedback resistors
+        constexpr double c4 = 51e-12;                   // feedback capacitor
+        constexpr double r9 = 1e3, c5 = 0.22e-6;        // passive low-pass after the clipper
+        constexpr double diodeIs = 2.52e-9, diodeNVt = 1.752 * 0.02585;   // 1N914
+        constexpr double pi = 3.141592653589793;
+
+        // feedback network current for a voltage across it (resistors in parallel with the two diodes)
+        inline double current (double v, double invRf) { return v * invRf + 2.0 * diodeIs * std::sinh (v / diodeNVt); }
+        inline double slope (double v, double invRf)   { return invRf + 2.0 * diodeIs / diodeNVt * std::cosh (v / diodeNVt); }
+
+        // one-pole corner of an RC pair, prewarped for the bilinear transform
+        inline double corner (double r, double c, double rate) { return std::tan (pi * (1.0 / (2.0 * pi * r * c)) / rate); }
+    }
+
+    double TubeScreamer::driveResistance (float driveKnob)
+    {
+        const double d = juce::jlimit (0.0, 1.0, (double) driveKnob / 10.0);
+        return ts808::r4 + ts808::rDrive * std::pow (d, 3.3);   // audio-taper pot
+    }
+
+    double TubeScreamer::clippingStageGain (float driveKnob)
+    {
+        return 1.0 + driveResistance (driveKnob) / ts808::r6;
+    }
+
     void TubeScreamer::prepare (double sampleRate, int maxBlockSize)
     {
         maxBlock = maxBlockSize;
         os.initProcessing ((size_t) maxBlockSize);
-        osRate = sampleRate * 2.0;
-        lowCoef = onePole (720.0, osRate);   // the pedal's 720 Hz corner
+        osRate = sampleRate * 4.0;
+        hpG = ts808::corner (ts808::r6, ts808::c3, osRate);
+        c5G = ts808::corner (ts808::r9, ts808::c5, osRate);
+        lastTone = -1.0f;
         reset();
     }
 
     void TubeScreamer::reset()
     {
         os.reset();
-        low = t1 = t2 = 0.0f;
+        hpS = vf = iPrev = fPrev = c5S = tz = 0.0;
+        lastRf = 0.0;
+    }
+
+    void TubeScreamer::setTone (float toneKnob)
+    {
+        if (toneKnob == lastTone)
+            return;
+        lastTone = toneKnob;
+
+        // Published behaviour of the tone stage: at minimum a 400 Hz low-pass, at the centre flat, at maximum a shelf
+        // from 725 Hz to 4 kHz (gain 1 + R10/R7 = 5.55). In between, the corners move smoothly.
+        const double t = juce::jlimit (0.0, 1.0, (double) toneKnob / 10.0);
+        double fp, invWz;   // pole frequency, and 1 / zero frequency (0 means no zero)
+        if (t < 0.5)
+        {
+            const double u = 2.0 * t;
+            fp = 400.0 * std::pow (4.0, u);
+            invWz = u * u / fp;
+        }
+        else
+        {
+            const double u = 2.0 * t - 1.0;
+            fp = 1600.0 * std::pow (4000.0 / 1600.0, u);
+            invWz = 1.0 / (1600.0 * std::pow (725.0 / 1600.0, u));
+        }
+
+        // H(s) = (1 + s/wz) / (1 + s/wp), bilinear transform (prewarped at the pole)
+        // s = (wp / kp) (1 - z^-1) / (1 + z^-1), so s/wp -> (1/kp)(...) and s/wz -> (fp / (fz kp))(...)
+        const double kp = std::tan (ts808::pi * fp / osRate);
+        const double zTerm = invWz * fp / kp;
+        const double n0 = 1.0 + zTerm, n1 = 1.0 - zTerm;
+        const double d0 = 1.0 + 1.0 / kp, d1 = 1.0 - 1.0 / kp;
+        tb0 = n0 / d0;
+        tb1 = n1 / d0;
+        ta1 = d1 / d0;
     }
 
     void TubeScreamer::process (float* x, int n, float driveKnob, float toneKnob, float levelKnob)
     {
-        const float d = driveKnob / 10.0f;
-        const float stageGain = 1.0f + 100.0f * d * d;
-        const float toneHz = 900.0f * std::pow (6.67f, toneKnob / 10.0f);   // 900 Hz .. 6 kHz
-        const float toneCoef = onePole (toneHz, osRate);
-        constexpr float diodeLimit = 0.3f;
+        const double rf = driveResistance (driveKnob);
+        const double invRf = 1.0 / rf;
+        const double cT = 2.0 * ts808::c4 * osRate;   // trapezoidal rule for the 51pF capacitor
+        if (rf != lastRf)
+        {
+            fPrev = ts808::current (vf, invRf);
+            lastRf = rf;
+        }
+        setTone (toneKnob);
 
         processOversampled (os, x, n, maxBlock, [&] (float* s, size_t count)
         {
             for (size_t i = 0; i < count; ++i)
             {
-                const float in = s[i];
-                low += lowCoef * (in - low);
-                const float highs = in - low;
-                const float clipped = diodeLimit * std::tanh (stageGain * highs / diodeLimit);
-                const float y = in + clipped;
-                t1 += toneCoef * (y - t1);
-                t2 += toneCoef * (t1 - t2);
-                s[i] = t2;
+                const double in = s[i];
+
+                // current into the feedback network: the input through the 4.7k + 47nF leg (720 Hz high-pass)
+                const double v = (in - hpS) * hpG / (1.0 + hpG);
+                const double lp = v + hpS;
+                hpS = lp + v;
+                const double current = (in - lp) / ts808::r6;
+
+                // voltage across the feedback network: c4 dv/dt + v/Rf + diodes = current, solved with Newton's method
+                double u = vf;
+                for (int k = 0; k < 8; ++k)
+                {
+                    const double g = cT * (u - vf) - (current + iPrev) + ts808::current (u, invRf) + fPrev;
+                    const double step = juce::jlimit (-0.1, 0.1, g / (cT + ts808::slope (u, invRf)));
+                    u -= step;
+                    if (std::abs (step) < 1.0e-7)
+                        break;
+                }
+                vf = u;
+                iPrev = current;
+                fPrev = ts808::current (u, invRf);
+
+                // op-amp output (on 9 V it can swing about 3.5 V either way), then R9/C5
+                const double opamp = 3.5 * std::tanh ((in + u) / 3.5);
+                const double w = (opamp - c5S) * c5G / (1.0 + c5G);
+                const double low = w + c5S;
+                c5S = low + w;
+
+                // tone stage
+                const double y = tb0 * low + tz;
+                tz = tb1 * low - ta1 * y;
+                s[i] = (float) y;
             }
         });
 
-        const float level = dbToGain (knobDb (levelKnob));
+        const float k = juce::jlimit (0.0f, 1.0f, levelKnob / 10.0f);
+        const float level = k * k;   // 100k volume pot: about unity around the middle with a firm note
         for (int i = 0; i < n; ++i)
             x[i] *= level;
     }

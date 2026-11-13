@@ -262,9 +262,26 @@ AmpView::AmpView (GuitarDriveProcessor& p, const juce::Image& logoImage)
                 st.revType.setToggleState (st.revState != 0, juce::dontSendNotification);
             });
         strip.revType.onClick = [this, s] { revAttach[(size_t) s]->setValueAsCompleteGesture (strips[(size_t) s].revState != 0 ? 0.0f : 1.0f); };
+
+        // amp model: AB763 Deluxe Reverb (breaks up early) or Twin Reverb (huge clean headroom)
+        styleAmpButton (strip.ampType);
+        strip.ampType.setTooltip ("DELUXE: 22 W Deluxe Reverb, breaks up around volume 5. TWIN: 85 W Twin Reverb, stays clean.");
+        addAndMakeVisible (strip.ampType);
+        ampAttach[(size_t) s] = std::make_unique<juce::ParameterAttachment> (
+            *apvts.getParameter (GuitarDriveProcessor::paramId (s, GuitarDriveProcessor::ampTypeId)),
+            [this, s] (float v)
+            {
+                auto& st = strips[(size_t) s];
+                st.ampState = v > 0.5f ? 1 : 0;
+                st.ampType.setButtonText (st.ampState != 0 ? "TWIN" : "DELUXE");
+                st.ampType.setToggleState (st.ampState != 0, juce::dontSendNotification);
+            });
+        strip.ampType.onClick = [this, s] { ampAttach[(size_t) s]->setValueAsCompleteGesture (strips[(size_t) s].ampState != 0 ? 0.0f : 1.0f); };
     }
 
     for (auto& a : revAttach)
+        a->sendInitialUpdate();
+    for (auto& a : ampAttach)
         a->sendInitialUpdate();
     setStereo (false);
 }
@@ -285,6 +302,7 @@ void AmpView::updateVisibility()
         for (auto& k : strips[(size_t) s].knobs)
             k.show (shown);
         strips[(size_t) s].revType.setVisible (shown);
+        strips[(size_t) s].ampType.setVisible (shown);
     }
 }
 
@@ -320,6 +338,7 @@ void AmpView::layoutAmp (int index, juce::Rectangle<int> area)
     };
 
     l.jack = take (stereo ? (index == 0 ? "LEFT" : "RIGHT") : "INPUT", 84);
+    strip.ampType.setBounds (l.jack.removeFromBottom (38).withSizeKeepingCentre (76, 26));
     placeKnobs (take ("PREAMP", 4 * col), 0, 4);
     placeKnobs (take ("TONE", 3 * col), 4, 3);
     const auto beside = placeKnobs (take ("REVERB", col + 88), 7, 1);
