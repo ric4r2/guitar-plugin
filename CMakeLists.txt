@@ -21,12 +21,29 @@ juce_add_plugin(GuitarDrive
 target_sources(GuitarDrive PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/ChannelStrip.cpp)
+    Source/ChannelStrip.cpp
+    Source/Effects.cpp)
+
+# Standalone app: JUCE's stock app, except the window always opens centred.
+target_sources(GuitarDrive_Standalone PRIVATE Source/StandaloneApp.cpp)
+target_compile_definitions(GuitarDrive_Standalone PRIVATE JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
 
 target_compile_definitions(GuitarDrive PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0)
+
+# Offline DSP tests: cmake -DGUITARDRIVE_BUILD_TESTS=ON, then build the GuitarDriveTests target and run it.
+option(GUITARDRIVE_BUILD_TESTS "Build the offline DSP tests" OFF)
+if(GUITARDRIVE_BUILD_TESTS)
+    juce_add_console_app(GuitarDriveTests PRODUCT_NAME "GuitarDriveTests")
+    target_sources(GuitarDriveTests PRIVATE Tests/DspTests.cpp Source/ChannelStrip.cpp Source/Effects.cpp)
+    target_include_directories(GuitarDriveTests PRIVATE Source)
+    target_compile_definitions(GuitarDriveTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_link_libraries(GuitarDriveTests PRIVATE
+        juce::juce_audio_utils juce::juce_dsp
+        juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+endif()
 
 # Optional ASIO for the Standalone app: -DASIO_SDK_DIR=<path to ASIOSDK folder containing common/>
 # The SDK is not redistributable here, so keep it outside the repo.

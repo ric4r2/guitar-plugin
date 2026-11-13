@@ -1,30 +1,68 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+namespace
+{
+    using ParamList = std::vector<std::unique_ptr<juce::RangedAudioParameter>>;
+
+    void addKnob (ParamList& p, const juce::String& id, const juce::String& name, const Params::KnobDef& k)
+    {
+        p.push_back (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { id, 1 }, name,
+            juce::NormalisableRange<float> (k.min, k.max, k.step), k.def,
+            juce::AudioParameterFloatAttributes().withStringFromValueFunction ([k] (float v, int) { return Params::format (k, v); })));
+    }
+
+    void addSwitch (ParamList& p, const juce::String& id, const juce::String& name, bool def)
+    {
+        p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { id, 1 }, name, def));
+    }
+}
+
 GuitarDriveProcessor::GuitarDriveProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
+    stereoPtr = raw (stereoId);
+    soloPtr = raw (soloId);
+    rightSamePtr = raw (rightSameId);
+    inputPtr = raw (Params::inputKnob().id);
+    outputPtr = raw (Params::outputKnob().id);
+    for (int s = 0; s < 2; ++s)
+        panPtr[s] = raw (paramId (s, panId));
+
+    eqOnPtr = raw (Params::eqOn);
+    for (int b = 0; b < Params::numEqBands; ++b)
+        eqPtr[(size_t) b] = raw (Params::eqId (b));
+
+    metroOnPtr = raw (Params::metroOn);
+    metroBpmPtr = raw (Params::metroBpm);
+    metroSigPtr = raw (Params::metroSig);
+    metroVolPtr = raw (Params::metroVol);
+
+    postPtrs.phOn = raw ("ph_on");   postPtrs.phRate = raw ("ph_rate");   postPtrs.phDepth = raw ("ph_depth");
+    postPtrs.phFb = raw ("ph_fb");   postPtrs.phMix = raw ("ph_mix");
+    postPtrs.chOn = raw ("ch_on");   postPtrs.chRate = raw ("ch_rate");   postPtrs.chDepth = raw ("ch_depth");
+    postPtrs.chMix = raw ("ch_mix");
+    postPtrs.trOn = raw ("tr_on");   postPtrs.trRate = raw ("tr_rate");   postPtrs.trDepth = raw ("tr_depth");
+    postPtrs.dlOn = raw ("dl_on");   postPtrs.dlTime = raw ("dl_time");   postPtrs.dlFb = raw ("dl_fb");
+    postPtrs.dlTone = raw ("dl_tone");   postPtrs.dlMix = raw ("dl_mix");
+    postPtrs.rvOn = raw ("rv_on");   postPtrs.rvSize = raw ("rv_size");   postPtrs.rvDamp = raw ("rv_damp");
+    postPtrs.rvMix = raw ("rv_mix");
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::createLayout()
 {
     using namespace juce;
-    std::vector<std::unique_ptr<RangedAudioParameter>> p;
-
-    const char* names[] = { "Gain", "Warmth", "Bass", "Mid", "Treble", "Reverb", "Master" };
-    const float defaults[] = { 5.0f, 3.0f, 5.0f, 5.0f, 5.0f, 2.5f, 8.0f };
+    ParamList p;
 
     for (int strip = 0; strip < 2; ++strip)
     {
         const String prefix = strip == 0 ? "" : "Right ";
 
-        for (int k = 0; k < 7; ++k)
-            p.push_back (std::make_unique<AudioParameterFloat> (
-                ParameterID { paramId (strip, knobIds[k]), 1 }, prefix + names[k],
-                NormalisableRange<float> (0.0f, 10.0f, 0.01f), defaults[k],
-                AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 1); })));
+        for (const auto& k : Params::stripKnobs())
+            addKnob (p, paramId (strip, k.id), prefix + k.label, k);
 
         p.push_back (std::make_unique<AudioParameterFloat> (
             ParameterID { paramId (strip, panId), 1 }, prefix + "Pan",
@@ -42,26 +80,66 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
                     if (t.startsWith ("R")) return  t.substring (1).getFloatValue() / 100.0f;
                     return 0.0f;
                 })));
+
+        p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { paramId (strip, revTypeId), 1 }, prefix + "Reverb Type",
+                                                             StringArray { "Plate", "Spring" }, 0));
     }
 
-    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { stereoId, 1 }, "Stereo Mode", false));
+    addKnob (p, Params::inputKnob().id, "Input", Params::inputKnob());
+    addKnob (p, Params::outputKnob().id, "Output", Params::outputKnob());
+
+    for (const auto* pedals : { &Params::prePedals(), &Params::postPedals() })
+        for (const auto& pedal : *pedals)
+        {
+            addSwitch (p, pedal.onId, String (pedal.title) + " On", false);
+            for (const auto& k : pedal.knobs)
+                addKnob (p, k.id, String (pedal.title) + " " + k.label, k);
+            if (pedal.toggleId != nullptr)
+                addSwitch (p, pedal.toggleId, String (pedal.title) + " " + pedal.toggleLabel, false);
+        }
+
+    addSwitch (p, Params::eqOn, "EQ On", true);
+    for (int b = 0; b < Params::numEqBands; ++b)
+        addKnob (p, Params::eqId (b), String ("EQ ") + Params::eqLabel (b),
+                 { Params::eqId (b), Params::eqLabel (b), -12.0f, 12.0f, 0.0f, 0.1f, " dB", 1 });
+
+    addSwitch (p, Params::metroOn, "Metronome On", false);
+    addKnob (p, Params::metroBpm, "Metronome BPM", { Params::metroBpm, "BPM", 30.0f, 260.0f, 100.0f, 1.0f, "", 0 });
+    StringArray sigs;
+    for (int i = 0; i < Metronome::numSigs; ++i)
+        sigs.add (Metronome::sigName (i));
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { Params::metroSig, 1 }, "Metronome Time Signature", sigs, 2));
+    addKnob (p, Params::metroVol, "Metronome Volume", { Params::metroVol, "VOL", 0.0f, 10.0f, 5.0f, 0.01f });
+
+    addSwitch (p, stereoId, "Stereo Mode", false);
     p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { soloId, 1 }, "Solo",
                                                          StringArray { "Off", "Left", "Right" }, 0));
-    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { rightSameId, 1 }, "Right Uses Input 1", true));
+    addSwitch (p, rightSameId, "Right Uses Input 1", true);
     return { p.begin(), p.end() };
 }
 
 ChannelStrip::Params GuitarDriveProcessor::paramsFor (int strip) const
 {
-    auto get = [this, strip] (const char* base) { return apvts.getRawParameterValue (paramId (strip, base)); };
+    auto own = [this, strip] (const char* base) { return raw (paramId (strip, base)); };
+
     ChannelStrip::Params p;
-    p.gain = get (knobIds[0]);
-    p.warmth = get (knobIds[1]);
-    p.bass = get (knobIds[2]);
-    p.mid = get (knobIds[3]);
-    p.treble = get (knobIds[4]);
-    p.reverb = get (knobIds[5]);
-    p.master = get (knobIds[6]);
+    p.gate = own ("gate");
+    p.trans = own ("trans");
+    p.gain = own ("gain");
+    p.warmth = own ("warmth");
+    p.bass = own ("bass");
+    p.mid = own ("mid");
+    p.treble = own ("treble");
+    p.reverb = own ("reverb");
+    p.master = own ("master");
+    p.revType = own (revTypeId);
+
+    p.wahOn = raw ("wah_on");   p.wahAuto = raw ("wah_auto");   p.wahPos = raw ("wah_pos");
+    p.wahSens = raw ("wah_sens");   p.wahQ = raw ("wah_q");
+    p.compOn = raw ("comp_on");   p.compSustain = raw ("comp_sustain");   p.compAttack = raw ("comp_attack");
+    p.compLevel = raw ("comp_level");
+    p.tsOn = raw ("ts_on");   p.tsDrive = raw ("ts_drive");   p.tsTone = raw ("ts_tone");   p.tsLevel = raw ("ts_level");
+    p.odOn = raw ("od_on");   p.odDrive = raw ("od_drive");   p.odTone = raw ("od_tone");   p.odLevel = raw ("od_level");
     return p;
 }
 
@@ -83,8 +161,17 @@ void GuitarDriveProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     }
     setLatencySamples (strips[0].getLatencySamples());
 
+    eq.prepare (sampleRate, samplesPerBlock);
+    eqSwitch.prepare (sampleRate, eqOnPtr->load() > 0.5f);
+    post.prepare (sampleRate, samplesPerBlock);
+    metronome.prepare (sampleRate);
+
     scratch.setSize (numScratch, samplesPerBlock, false, false, true);
 
+    inputGain.reset (sampleRate, 0.02);
+    outputGain.reset (sampleRate, 0.02);
+    inputGain.setCurrentAndTargetValue (fx::dbToGain (inputPtr->load()));
+    outputGain.setCurrentAndTargetValue (fx::dbToGain (outputPtr->load()));
     muteSmooth.reset (sampleRate, 0.02);
     muteSmooth.setCurrentAndTargetValue (1.0f);
     switchFade.reset (sampleRate, 0.02);
@@ -95,7 +182,7 @@ void GuitarDriveProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
         chanCenter[c].reset (sampleRate, 0.02);
         chanPan[c].reset (sampleRate, 0.03);
     }
-    wasStereo = param (stereoId) > 0.5f;
+    wasStereo = stereoPtr->load() > 0.5f;
     if (wasStereo)
         strips[1].reset();
 
@@ -167,7 +254,7 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     }
 
     ensureScratch (n);
-    const bool stereo = param (stereoId) > 0.5f;
+    const bool stereo = stereoPtr->load() > 0.5f;
 
     // Take copies of the inputs: the output is written back into the same buffer.
     float* left = scratch.getWritePointer (in0);
@@ -175,8 +262,17 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     juce::FloatVectorOperations::copy (left, buffer.getReadPointer (0), n);
     // With one guitar on input 1 the right strip would otherwise listen to an empty input 2 and stay silent,
     // so by default both strips take input 1 (two independent chains from the same guitar).
-    const bool rightFromLeft = param (rightSameId) > 0.5f;
+    const bool rightFromLeft = rightSamePtr->load() > 0.5f;
     juce::FloatVectorOperations::copy (right, buffer.getReadPointer (numIn > 1 && ! rightFromLeft ? 1 : 0), n);
+
+    // Input volume: plain gain, before everything else.
+    inputGain.setTargetValue (fx::dbToGain (inputPtr->load()));
+    for (int i = 0; i < n; ++i)
+    {
+        const float g = inputGain.getNextValue();
+        left[i] *= g;
+        right[i] *= g;
+    }
 
     const bool tuning = tunerActive.load();
     if (tuning)
@@ -206,7 +302,7 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             {
                 chanGain[c].setCurrentAndTargetValue (1.0f);
                 chanCenter[c].setCurrentAndTargetValue (0.0f);
-                chanPan[c].setCurrentAndTargetValue (param (paramId (c, panId)));
+                chanPan[c].setCurrentAndTargetValue (panPtr[c]->load());
             }
         }
         switchFade.setCurrentAndTargetValue (0.0f);   // fade the new mode in instead of clicking
@@ -222,27 +318,24 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     if (stereo)
         strips[1].process (right, s1L, s1R, n);
 
-    muteSmooth.setTargetValue (tuning ? 0.0f : 1.0f);
-
     // Solo / mute are linked: soloing one side mutes the other. A soloed side is sent to both
     // speakers (mono, ignoring its pan); with nothing soloed each side sits at its pan position.
-    const int solo = stereo ? (int) std::lround (param (soloId)) : 0;
+    const int solo = stereo ? (int) std::lround (soloPtr->load()) : 0;
     for (int c = 0; c < 2; ++c)
     {
         chanGain[c].setTargetValue (solo == 0 || solo == c + 1 ? 1.0f : 0.0f);
         chanCenter[c].setTargetValue (solo == c + 1 ? 1.0f : 0.0f);
-        chanPan[c].setTargetValue (param (paramId (c, panId)));
+        chanPan[c].setTargetValue (panPtr[c]->load());
     }
 
-    float* outL = buffer.getWritePointer (0);
-    float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
+    float* mixLp = scratch.getWritePointer (mixL);
+    float* mixRp = scratch.getWritePointer (mixR);
     const float* sL[2] = { s0L, s1L };
     const float* sR[2] = { s0R, s1R };
     constexpr float quarterPi = juce::MathConstants<float>::pi * 0.25f;
 
     for (int i = 0; i < n; ++i)
     {
-        const float fade = switchFade.getNextValue() * muteSmooth.getNextValue();
         float l, r;
 
         if (! stereo)
@@ -264,15 +357,65 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
                 r += g * (panR + center * (1.0f - panR)) * sR[c][i];
             }
         }
+        mixLp[i] = l;
+        mixRp[i] = r;
+    }
+
+    // Equalizer, then the effects after it.
+    {
+        std::array<float, Params::numEqBands> gains;
+        for (size_t b = 0; b < gains.size(); ++b)
+            gains[b] = eqPtr[b]->load();
+
+        eqSwitch.setOn (eqOnPtr->load() > 0.5f);
+        if (eqSwitch.needsProcessing())
+        {
+            float* dryL = scratch.getWritePointer (eqDryL);
+            float* dryR = scratch.getWritePointer (eqDryR);
+            juce::FloatVectorOperations::copy (dryL, mixLp, n);
+            juce::FloatVectorOperations::copy (dryR, mixRp, n);
+            eq.process (mixLp, mixRp, n, gains);
+            eqSwitch.blend (dryL, dryR, mixLp, mixRp, n);
+        }
+    }
+
+    {
+        fx::PostParams pp;
+        pp.phOn = postPtrs.phOn->load() > 0.5f;   pp.phRate = postPtrs.phRate->load();   pp.phDepth = postPtrs.phDepth->load();
+        pp.phFb = postPtrs.phFb->load();   pp.phMix = postPtrs.phMix->load();
+        pp.chOn = postPtrs.chOn->load() > 0.5f;   pp.chRate = postPtrs.chRate->load();   pp.chDepth = postPtrs.chDepth->load();
+        pp.chMix = postPtrs.chMix->load();
+        pp.trOn = postPtrs.trOn->load() > 0.5f;   pp.trRate = postPtrs.trRate->load();   pp.trDepth = postPtrs.trDepth->load();
+        pp.dlOn = postPtrs.dlOn->load() > 0.5f;   pp.dlTime = postPtrs.dlTime->load();   pp.dlFb = postPtrs.dlFb->load();
+        pp.dlTone = postPtrs.dlTone->load();   pp.dlMix = postPtrs.dlMix->load();
+        pp.rvOn = postPtrs.rvOn->load() > 0.5f;   pp.rvSize = postPtrs.rvSize->load();   pp.rvDamp = postPtrs.rvDamp->load();
+        pp.rvMix = postPtrs.rvMix->load();
+        post.process (mixLp, mixRp, n, pp);
+    }
+
+    metronome.process (mixLp, mixRp, n, metroOnPtr->load() > 0.5f, metroBpmPtr->load(),
+                       (int) std::lround (metroSigPtr->load()), metroVolPtr->load());
+
+    // Output volume, tuner mute and mode fade, then out.
+    muteSmooth.setTargetValue (tuning ? 0.0f : 1.0f);
+    outputGain.setTargetValue (fx::dbToGain (outputPtr->load()));
+
+    float* outL = buffer.getWritePointer (0);
+    float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
+    for (int i = 0; i < n; ++i)
+    {
+        const float gain = switchFade.getNextValue() * muteSmooth.getNextValue() * outputGain.getNextValue();
+        const float l = mixLp[i] * gain;
+        const float r = mixRp[i] * gain;
 
         if (outR != nullptr)
         {
-            outL[i] = l * fade;
-            outR[i] = r * fade;
+            outL[i] = l;
+            outR[i] = r;
         }
         else
         {
-            outL[i] = 0.5f * (l + r) * fade;
+            outL[i] = 0.5f * (l + r);
         }
     }
 }

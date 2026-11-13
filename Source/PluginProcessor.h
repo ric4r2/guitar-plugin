@@ -2,6 +2,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 #include "ChannelStrip.h"
+#include "Effects.h"
+#include "Metronome.h"
+#include "Params.h"
 #include "Tuner.h"
 
 class GuitarDriveProcessor : public juce::AudioProcessor
@@ -20,7 +23,7 @@ public:
     const juce::String getName() const override { return "GuitarDrive"; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 2.0; }
+    double getTailLengthSeconds() const override { return 3.0; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -31,11 +34,11 @@ public:
     void getStateInformation (juce::MemoryBlock&) override;
     void setStateInformation (const void*, int) override;
 
-    // Per-strip knobs run 0..10 (pan runs -1..1). Strip 0 is the mono / left strip, strip 1 the right strip.
-    static constexpr const char* knobIds[] = { "gain", "warmth", "bass", "mid", "treble", "reverb", "master" };
-    static constexpr const char* panId = "pan";
-    static constexpr const char* stereoId = "stereo";   // false = mono (default), true = two strips
-    static constexpr const char* soloId = "solo";       // 0 = off, 1 = left soloed (right muted), 2 = right soloed (left muted)
+    // Per-strip parameters come from Params::stripKnobs() plus these. Strip 0 is the mono / left strip, strip 1 the right strip.
+    static constexpr const char* panId = "pan";            // -1 (left) .. +1 (right), stereo mode only
+    static constexpr const char* revTypeId = "revtype";    // 0 = plate (smooth), 1 = spring
+    static constexpr const char* stereoId = "stereo";      // false = mono (default), true = two strips
+    static constexpr const char* soloId = "solo";          // 0 = off, 1 = left soloed (right muted), 2 = right soloed (left muted)
     static constexpr const char* rightSameId = "rightsame";   // stereo mode: true = right strip hears input 1 too, false = input 2
 
     static juce::String paramId (int strip, const char* base) { return strip == 0 ? juce::String (base) : "r_" + juce::String (base); }
@@ -46,24 +49,52 @@ public:
     // Copies the latest PitchDetector::frameSize decimated samples; false until enough have arrived.
     bool getTunerFrame (float* dest, double& sampleRate) const;
 
+    const Metronome& getMetronome() const { return metronome; }
+
     juce::AudioProcessorValueTreeState apvts { *this, nullptr, "STATE", createLayout() };
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
-    float param (const juce::String& id) const { return apvts.getRawParameterValue (id)->load(); }
+    const std::atomic<float>* raw (const juce::String& id) const { return apvts.getRawParameterValue (id); }
     ChannelStrip::Params paramsFor (int strip) const;
     void feedTuner (const float* mono, int n);
     void ensureScratch (int n);
 
     // scratch channels
-    enum { in0, in1, out0L, out0R, out1L, out1R, numScratch };
+    enum { in0, in1, out0L, out0R, out1L, out1R, mixL, mixR, eqDryL, eqDryR, numScratch };
 
     ChannelStrip strips[2];
+    fx::GraphicEq eq;
+    fx::PedalSwitch eqSwitch;
+    fx::PostFx post;
+    Metronome metronome;
     juce::AudioBuffer<float> scratch { numScratch, 0 };
 
-    juce::SmoothedValue<float> muteSmooth, switchFade;
+    juce::SmoothedValue<float> inputGain, outputGain, muteSmooth, switchFade;
     juce::SmoothedValue<float> chanGain[2], chanCenter[2], chanPan[2];
     bool wasStereo = false;
+
+    // cached parameter pointers
+    const std::atomic<float>* stereoPtr = nullptr;
+    const std::atomic<float>* soloPtr = nullptr;
+    const std::atomic<float>* rightSamePtr = nullptr;
+    const std::atomic<float>* inputPtr = nullptr;
+    const std::atomic<float>* outputPtr = nullptr;
+    const std::atomic<float>* panPtr[2] = {};
+    const std::atomic<float>* eqOnPtr = nullptr;
+    std::array<const std::atomic<float>*, Params::numEqBands> eqPtr {};
+    const std::atomic<float>* metroOnPtr = nullptr;
+    const std::atomic<float>* metroBpmPtr = nullptr;
+    const std::atomic<float>* metroSigPtr = nullptr;
+    const std::atomic<float>* metroVolPtr = nullptr;
+    struct PostPtrs
+    {
+        const std::atomic<float> *phOn, *phRate, *phDepth, *phFb, *phMix;
+        const std::atomic<float> *chOn, *chRate, *chDepth, *chMix;
+        const std::atomic<float> *trOn, *trRate, *trDepth;
+        const std::atomic<float> *dlOn, *dlTime, *dlFb, *dlTone, *dlMix;
+        const std::atomic<float> *rvOn, *rvSize, *rvDamp, *rvMix;
+    } postPtrs {};
 
     // tuner capture (written on the audio thread, read by the editor)
     static constexpr int tunerRingSize = 8192;   // power of two
