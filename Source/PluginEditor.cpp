@@ -176,7 +176,9 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
       tunerView (p),
       stereoAttach (*p.apvts.getParameter (GuitarDriveProcessor::stereoId), [this] (float v) { setStereo (v > 0.5f); }),
       soloAttach (*p.apvts.getParameter (GuitarDriveProcessor::soloId),
-                  [this] (float v) { soloState = (int) std::lround (v); updateSoloButtons(); })
+                  [this] (float v) { soloState = (int) std::lround (v); updateSoloButtons(); }),
+      rightInAttach (*p.apvts.getParameter (GuitarDriveProcessor::rightSameId),
+                     [this] (float v) { rightUsesIn1 = v > 0.5f; rightInButton.setToggleState (rightUsesIn1, juce::dontSendNotification); })
 {
     for (int s = 0; s < 2; ++s)
     {
@@ -231,8 +233,14 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
     stereoButton.onClick = [this] { stereoAttach.setValueAsCompleteGesture (stereoMode ? 0.0f : 1.0f); };
     addAndMakeVisible (stereoButton);
 
+    // On: the right strip hears input 1 (one guitar through two chains). Off: it hears input 2.
+    styleButton (rightInButton, accent);
+    rightInButton.onClick = [this] { rightInAttach.setValueAsCompleteGesture (rightUsesIn1 ? 0.0f : 1.0f); };
+    addChildComponent (rightInButton);
+
     addChildComponent (tunerView);
 
+    rightInAttach.sendInitialUpdate();
     soloAttach.sendInitialUpdate();
     stereoAttach.sendInitialUpdate();
 }
@@ -290,6 +298,7 @@ void GuitarDriveEditor::updateVisibility()
         strip.solo.setVisible (stripShown && stereoMode);
         strip.mute.setVisible (stripShown && stereoMode);
     }
+    rightInButton.setVisible (stereoMode && ! tunerOpen);
     tunerView.setVisible (tunerOpen);
 }
 
@@ -304,7 +313,8 @@ void GuitarDriveEditor::paint (juce::Graphics& g)
     g.setColour (juce::Colours::grey);
     g.setFont (juce::FontOptions (12.0f));
     if (! tunerOpen)
-        g.drawText ("Scroll over a knob to turn it  |  Shift = fine  |  Double-click = reset",
+        g.drawText (stereoMode ? "Scroll over a knob to turn it  |  Shift = fine  |  Double-click = reset  |  R USES IN 1: on = right strip hears input 1, off = input 2"
+                               : "Scroll over a knob to turn it  |  Shift = fine  |  Double-click = reset",
                     20, getHeight() - 28, getWidth() - 40, 20, juce::Justification::centredLeft);
 
     if (stereoMode && ! tunerOpen)
@@ -343,6 +353,7 @@ void GuitarDriveEditor::resized()
 {
     tunerButton.setBounds (getWidth() - 20 - 90, 12, 90, 28);
     stereoButton.setBounds (getWidth() - 20 - 90 - 10 - 100, 12, 100, 28);
+    rightInButton.setBounds (getWidth() - 20 - 90 - 10 - 100 - 10 - 130, 12, 130, 28);
 
     auto area = getLocalBounds().reduced (20, 0);
     area.removeFromTop (50);

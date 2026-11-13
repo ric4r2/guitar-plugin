@@ -40,7 +40,7 @@ private:
     Filter bassFilter, midFilter, trebleFilter;
     float lastBass = -1.0f, lastMid = -1.0f, lastTreble = -1.0f;
 
-    juce::dsp::Oversampling<float> oversampling { 1, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
+    juce::dsp::Oversampling<float> oversampling { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };   // 4x
 
     SpringReverb spring;
     juce::SmoothedValue<float> gainSmooth, warmthSmooth, reverbSmooth, masterSmooth;

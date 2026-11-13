@@ -31,7 +31,7 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     gainSmooth.reset (sampleRate, 0.03);
     reverbSmooth.reset (sampleRate, 0.03);
     masterSmooth.reset (sampleRate, 0.03);
-    warmthSmooth.reset (sampleRate * 2.0, 0.03);   // runs at the oversampled rate
+    warmthSmooth.reset (sampleRate * 4.0, 0.03);   // runs at the oversampled rate
     gainSmooth.setCurrentAndTargetValue (gainToLinear (params.gain->load()));
     reverbSmooth.setCurrentAndTargetValue (reverbToLinear (params.reverb->load()));
     masterSmooth.setCurrentAndTargetValue (masterToLinear (params.master->load()));
@@ -83,7 +83,7 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     for (int i = 0; i < n; ++i)
         outL[i] = in[i] * gainSmooth.getNextValue();
 
-    // Tube stage at 2x oversampling so the added harmonics don't alias.
+    // Tube stage at 4x oversampling so the added harmonics don't alias into fizz on fast attacks.
     {
         const float tanhBias = std::tanh (tubeBias);
         const float slopeAtRest = 1.0f - tanhBias * tanhBias;
@@ -98,7 +98,7 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
             for (size_t i = 0; i < up.getNumSamples(); ++i)
             {
                 const float k = warmthSmooth.getNextValue();
-                const float drive = 0.5f + 0.55f * k;
+                const float drive = 0.4f + 0.3f * k;
                 const float mix = std::min (1.0f, k * 0.5f);   // knob at 0 is fully clean
                 const float x = d[i];
                 const float shaped = (std::tanh (drive * x + tubeBias) - tanhBias) / (drive * slopeAtRest);

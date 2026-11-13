@@ -87,11 +87,11 @@ private:
 
     GuitarDriveProcessor& proc;
     std::array<StripUI, 2> strips;
-    juce::TextButton tunerButton { "TUNER" }, stereoButton { "STEREO" };
+    juce::TextButton tunerButton { "TUNER" }, stereoButton { "STEREO" }, rightInButton { "R USES IN 1" };
     TunerView tunerView;
-    juce::ParameterAttachment stereoAttach, soloAttach;
+    juce::ParameterAttachment stereoAttach, soloAttach, rightInAttach;
 
-    bool stereoMode = false, tunerOpen = false;
+    bool stereoMode = false, tunerOpen = false, rightUsesIn1 = true;
     int soloState = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GuitarDriveEditor)

@@ -60,15 +60,13 @@ public:
     {
         constexpr double twoPi = 6.283185307179586;
         baseDelay = (float) (delaySeconds * sampleRate);
-        slowDepth = (float) (0.0006 * sampleRate);
-        fastDepth = (float) (0.0001 * sampleRate);
-        buf.assign ((size_t) (baseDelay + slowDepth + fastDepth) + 4, 0.0f);
+        slowDepth = (float) (0.0004 * sampleRate);
+        buf.assign ((size_t) (baseDelay + slowDepth) + 4, 0.0f);
         fb = feedback;
         dispersion = dispersionCoef;
-        lpCoef = (float) (1.0 - std::exp (-twoPi * 3800.0 / sampleRate));
+        lpCoef = (float) (1.0 - std::exp (-twoPi * 2800.0 / sampleRate));
         hpCoef = (float) (1.0 - std::exp (-twoPi * 120.0 / sampleRate));
         slow.prepare (sampleRate, 1.3, seed);
-        fast.prepare (sampleRate, 7.0, seed * 2654435761u + 1u);
         reset();
     }
 
@@ -77,13 +75,13 @@ public:
         std::fill (buf.begin(), buf.end(), 0.0f);
         apState.fill (0.0f);
         writePos = 0;
-        lp = hp = 0.0f;
+        lp = lp2 = hp = 0.0f;
     }
 
     float process (float in)
     {
         const float slowMod = slow.next();
-        const float delay = baseDelay + slowDepth * slowMod + fastDepth * fast.next();
+        const float delay = baseDelay + slowDepth * slowMod;
 
         float readPos = (float) writePos - delay;
         if (readPos < 0.0f)
@@ -93,18 +91,18 @@ public:
         const float frac = readPos - (float) i0;
         float x = buf[(size_t) i0] + frac * (buf[(size_t) i1] - buf[(size_t) i0]);
 
-        const float a = dispersion + 0.02f * slowMod;
         for (auto& s : apState)
         {
-            const float y = a * x + s;
-            s = x - a * y;
+            const float y = dispersion * x + s;
+            s = x - dispersion * y;
             x = y;
         }
 
         x = std::tanh (x * 1.5f) * (1.0f / 1.5f);   // springs compress when driven hard
 
-        lp += lpCoef * (x - lp);   // damping: each pass loses some highs
-        x = lp;
+        lp += lpCoef * (x - lp);   // damping: each pass loses some highs (two poles = 12 dB/octave)
+        lp2 += lpCoef * (lp - lp2);
+        x = lp2;
         hp += hpCoef * (x - hp);   // keeps low-end rumble from building up in the loop
         x -= hp;
 
@@ -115,14 +113,14 @@ public:
     }
 
 private:
-    static constexpr int numStages = 60;
+    static constexpr int numStages = 30;
 
     std::vector<float> buf;
     std::array<float, numStages> apState {};
-    Wander slow, fast;
+    Wander slow;
     size_t writePos = 0;
-    float baseDelay = 1.0f, slowDepth = 0.0f, fastDepth = 0.0f;
-    float fb = 0.0f, dispersion = -0.65f, lpCoef = 0.0f, hpCoef = 0.0f, lp = 0.0f, hp = 0.0f;
+    float baseDelay = 1.0f, slowDepth = 0.0f;
+    float fb = 0.0f, dispersion = -0.65f, lpCoef = 0.0f, hpCoef = 0.0f, lp = 0.0f, lp2 = 0.0f, hp = 0.0f;
 };
 
 // Three springs of different length and character, spread left/right, fed from a band-limited mono input.
@@ -135,7 +133,7 @@ public:
         springA.prepare (sampleRate, 0.0270f, 0.80f, -0.65f, 0x1234abcdu);
         springB.prepare (sampleRate, 0.0335f, 0.80f, -0.60f, 0x9e3779b9u);
         springC.prepare (sampleRate, 0.0391f, 0.78f, -0.70f, 0x51ed270bu);
-        inLpCoef = (float) (1.0 - std::exp (-twoPi * 4500.0 / sampleRate));
+        inLpCoef = (float) (1.0 - std::exp (-twoPi * 2200.0 / sampleRate));
         inHpCoef = (float) (1.0 - std::exp (-twoPi * 150.0 / sampleRate));
         reset();
     }
@@ -145,14 +143,16 @@ public:
         springA.reset();
         springB.reset();
         springC.reset();
-        inLp = inHp = 0.0f;
+        inLp = inLp2 = inHp = 0.0f;
     }
 
     void process (float in, float& left, float& right)
     {
+        // The pick attack is mostly high frequencies; keep it out of the springs so it doesn't smear into hiss.
         inLp += inLpCoef * (in - inLp);
-        inHp += inHpCoef * (inLp - inHp);
-        const float x = inLp - inHp;
+        inLp2 += inLpCoef * (inLp - inLp2);
+        inHp += inHpCoef * (inLp2 - inHp);
+        const float x = inLp2 - inHp;
 
         const float a = springA.process (x);
         const float b = springB.process (x);
@@ -162,8 +162,8 @@ public:
     }
 
 private:
-    static constexpr float outScale = 0.75f;
+    static constexpr float outScale = 1.1f;
 
     SpringLine springA, springB, springC;
-    float inLp = 0.0f, inHp = 0.0f, inLpCoef = 0.0f, inHpCoef = 0.0f;
+    float inLp = 0.0f, inLp2 = 0.0f, inHp = 0.0f, inLpCoef = 0.0f, inHpCoef = 0.0f;
 };

@@ -47,6 +47,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
     p.push_back (std::make_unique<AudioParameterBool> (ParameterID { stereoId, 1 }, "Stereo Mode", false));
     p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { soloId, 1 }, "Solo",
                                                          StringArray { "Off", "Left", "Right" }, 0));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { rightSameId, 1 }, "Right Uses Input 1", true));
     return { p.begin(), p.end() };
 }
 
@@ -172,7 +173,10 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     float* left = scratch.getWritePointer (in0);
     float* right = scratch.getWritePointer (in1);
     juce::FloatVectorOperations::copy (left, buffer.getReadPointer (0), n);
-    juce::FloatVectorOperations::copy (right, buffer.getReadPointer (numIn > 1 ? 1 : 0), n);
+    // With one guitar on input 1 the right strip would otherwise listen to an empty input 2 and stay silent,
+    // so by default both strips take input 1 (two independent chains from the same guitar).
+    const bool rightFromLeft = param (rightSameId) > 0.5f;
+    juce::FloatVectorOperations::copy (right, buffer.getReadPointer (numIn > 1 && ! rightFromLeft ? 1 : 0), n);
 
     const bool tuning = tunerActive.load();
     if (tuning)
@@ -253,9 +257,9 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             {
                 const float g = chanGain[c].getNextValue();
                 const float center = chanCenter[c].getNextValue();
-                const float theta = (chanPan[c].getNextValue() + 1.0f) * quarterPi;   // equal-power pan
-                const float panL = std::cos (theta) * juce::MathConstants<float>::sqrt2;
-                const float panR = std::sin (theta) * juce::MathConstants<float>::sqrt2;
+                const float theta = (chanPan[c].getNextValue() + 1.0f) * quarterPi;   // equal-power pan: hard side = unity
+                const float panL = std::cos (theta);
+                const float panR = std::sin (theta);
                 l += g * (panL + center * (1.0f - panL)) * sL[c][i];
                 r += g * (panR + center * (1.0f - panR)) * sR[c][i];
             }

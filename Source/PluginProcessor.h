@@ -36,6 +36,7 @@ public:
     static constexpr const char* panId = "pan";
     static constexpr const char* stereoId = "stereo";   // false = mono (default), true = two strips
     static constexpr const char* soloId = "solo";       // 0 = off, 1 = left soloed (right muted), 2 = right soloed (left muted)
+    static constexpr const char* rightSameId = "rightsame";   // stereo mode: true = right strip hears input 1 too, false = input 2
 
     static juce::String paramId (int strip, const char* base) { return strip == 0 ? juce::String (base) : "r_" + juce::String (base); }
 
