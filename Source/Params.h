@@ -39,6 +39,11 @@ namespace Params
             { "treble", "TREBLE",    0.0f, 10.0f, 5.0f, 0.01f },
             { "reverb", "REVERB",    0.0f, 10.0f, 2.5f, 0.01f },
             { "master", "MASTER",    0.0f, 10.0f, 8.0f, 0.01f },
+            // recorded cabinet microphones (dark 0, balanced 5, clean and bright 10) and the spring tank's own knobs;
+            // these work when the program was built with the recorded IRs
+            { "cab_mic",   "MIC",    0.0f, 10.0f, 10.0f, 0.01f },
+            { "rev_dwell", "DWELL",  1.0f, 10.0f, 5.0f, 1.0f, "", 0 },
+            { "rev_tone",  "TONE",   1.0f, 10.0f, 5.0f, 1.0f, "", 0 },
         };
         return defs;
     }

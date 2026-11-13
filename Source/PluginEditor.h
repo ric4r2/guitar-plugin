@@ -127,7 +127,7 @@ public:
     void paint (juce::Graphics&) override;
 
 private:
-    static constexpr int numKnobs = 9;
+    static constexpr int numKnobs = 12;
 
     struct Strip
     {

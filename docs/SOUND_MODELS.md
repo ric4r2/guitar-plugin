@@ -7,13 +7,13 @@ real circuits, what is still an approximation, and where every number comes from
 
 Pick the amp with the **FENDER / TWO-ROCK** switch under the input jack. Each amp has its own speaker cabinet.
 
-| Stage | Fender (AB763 Deluxe Reverb) | Two-Rock (clean channel) | How it is modelled |
+| Stage | Fender (AB763 Twin Reverb) | Two-Rock (clean channel) | How it is modelled |
 |---|---|---|---|
 | V1A | 12AX7, 100k plate, 1.5k cathode, about 270 V | same type of stage | Norman Koren's 12AX7 equations, solved on the load line |
-| Tone stack | 250k treble, 250k bass, 100k slope, 250pF / 0.1uF / 0.047uF, 6.8k mid | Same network with a 25k mid pot and 47nF / 22nF caps: much less mid scoop, tighter bass | Yeh & Smith's exact transfer function, bilinear transform |
+| Tone stack | 250k treble, 250k bass, 100k slope, 120pF / 0.1uF / 0.047uF, 10k mid pot | Same network with a 25k mid pot and 47nF / 22nF caps: much less mid scoop, tighter bass | Yeh & Smith's exact transfer function, bilinear transform |
 | Into V1B | volume pot straight into V1B | volume pot, then an interstage divider (gain structure) | the Two-Rock's second stage clips much later |
-| Power amp | two 6V6, 22 W, soft supply | 6L6, big stiff supply | push-pull clip with sag; the Two-Rock has about 2.7x the headroom and a third of the sag |
-| Cabinet | open-back 1x12, Jensen/Oxford-type alnico voice | open-back 2x12, 65 W Celestion-type (TR-65 family) | impulse response built from the speaker's response curve (see below) |
+| Power amp | four 6L6, 85 W | 6L6, big stiff supply | push-pull clip with sag; both are big clean amps, built as clean platforms for pedals |
+| Cabinet | open-back 2x12 Twin (recorded IRs) or built-in 1x12 | open-back 2x12, 65 W Celestion-type (TR-65 family) | impulse response built from the speaker's response curve (see below) |
 
 Two-Rock does not publish schematics. Its model uses the documented Dumble-lineage topology with values chosen for
 its known voice, not traced component values.
@@ -24,12 +24,14 @@ The knobs:
 * **BASS / MID / TREBLE** are the real tone stack.
 * **WARMTH** is how hard the power tubes work. 3 is the stock amp.
 * **MASTER** is the output level.
+* **MIC** (cabinet) blends the three recorded microphones: 0 dark, 5 balanced, 10 clean and bright (the default).
+* **DWELL / TONE** (reverb) pick one of the 100 recorded positions of a Fender spring tank.
 
 How distorted a firm single-coil note gets (0.25 V, from the test program):
 
 | Volume | 3 | 4 | 5 | 6 | 7 | 8 | 10 |
 |---|---|---|---|---|---|---|---|
-| Fender THD % | 0.8 | 2.2 | 12 | 23 | 32 | 38 | 44 |
+| Fender THD % | 0.6 | 0.6 | 1.3 | 4.9 | 13 | 22 | 35 |
 | Two-Rock THD % | 0.8 | 0.5 | 0.5 | 2.1 | 6.9 | 14 | 27 |
 
 ### Speaker cabinets
@@ -42,10 +44,16 @@ The built-in cabinets are impulse responses that the program builds itself:
 
 They need no downloaded files and are part of the repository.
 
-**Recorded cabinets (your own build only).** You can put a recorded IR at `Assets/private-ir/fender.wav` and/or
-`Assets/private-ir/tworock.wav` and rebuild. It then replaces the built-in cabinet for that amp, at the same
-loudness. That folder is git-ignored, because most free IRs may be used but not redistributed. Don't share a build
-that contains them.
+**Recorded IRs (your own build only).** `tools/pack_irs.py <folder>` reads the IR zip files (Fender Twin Reverb
+cabinet, Two-Rock 2x12 65B cabinet, Fender spring reverb tank) and writes `Assets/private-ir/irs.bin`:
+
+* **Cabinets:** the three mics per cabinet are lined up with each other so the MIC knob can blend them without comb filtering.
+* **Spring tank:** the 100 IRs (Dwell 1-10 x Tone 1-10) are trimmed where the decay meets the noise floor (the files run on for up to 27 s with sweep artefacts at the end), faded out and stored as 16-bit.
+* **Size:** the pack is zlib-compressed to about 8.4 MB.
+
+The build embeds the pack into the program, so no IR files sit next to it. The pack is git-ignored, because the IRs'
+licenses allow use but not redistribution. Don't share a build that contains it. Without the pack, the built-in
+cabinets and the algorithmic spring are used.
 
 ## Tube Screamer: Ibanez TS808
 

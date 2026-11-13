@@ -6,6 +6,8 @@ namespace
     float volumeTaper (float knob)    { const float v = juce::jlimit (0.0f, 1.0f, knob / 10.0f); return std::pow (v, 3.3f); }
     float masterToLinear (float knob) { return knob < 0.05f ? 0.0f : juce::Decibels::decibelsToGain (juce::jmap (knob, 0.0f, 10.0f, -40.0f, 10.0f)); }
     float reverbToLinear (float knob) { return std::pow (knob / 10.0f, 1.5f); }
+    // the recorded tank IRs are packed with Dwell 5 / Tone 5 at unit energy; this sets them level with the plate
+    constexpr float springIRGain = 0.75f;
     // WARMTH pushes the power tubes: 3 is the stock amp, each step is 1.5 dB more (or less) drive into them
     float warmthToDrive (float knob)  { return juce::Decibels::decibelsToGain ((knob - 3.0f) * 1.5f); }
 }
@@ -54,26 +56,25 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     powerAmp.prepare (sampleRate * 4.0);
     coupleCoef = (float) (1.0 - std::exp (-juce::MathConstants<double>::twoPi * 12.0 / (sampleRate * 4.0)));
     coupleState = 0.0f;
-    // speaker cabinets: a recorded impulse response when one was supplied, otherwise the built-in one
+    // speaker cabinets start with the built-in ones; recorded ones arrive through postIR()
     {
         const juce::dsp::ProcessSpec stereoSpec { sampleRate, (juce::uint32) maxBlockSize, 2 };
         for (int m = 0; m < 2; ++m)
         {
             auto& c = cabinets[(size_t) m];
             c.prepare (stereoSpec);
-            const bool custom = customIR[(size_t) m].getNumSamples() > 0;
-            juce::AudioBuffer<float> ir;
-            if (custom)
-                ir.makeCopyOf (customIR[(size_t) m]);
-            else
-                ir = cab::build ((cab::Model) m, sampleRate);
-            c.loadImpulseResponse (std::move (ir), custom ? customIRRate[(size_t) m] : sampleRate,
+            c.loadImpulseResponse (cab::build ((cab::Model) m, sampleRate), sampleRate,
                                    juce::dsp::Convolution::Stereo::no, juce::dsp::Convolution::Trim::no,
                                    juce::dsp::Convolution::Normalise::no);
         }
+        springConv.prepare ({ sampleRate, (juce::uint32) maxBlockSize, 1 });
+        useSpringIR = false;
+        for (auto* b : { &sendBuf, &plateL, &plateR, &springL, &springR })
+            b->assign ((size_t) maxBlockSize, 0.0f);
     }
     ampModel = -1;
     applyAmpModel (params.ampType != nullptr && params.ampType->load() > 0.5f ? 1 : 0);
+    ++prepareCount;
 
     oversampling.initProcessing ((size_t) maxBlockSize);
     oversampling.reset();
@@ -94,10 +95,35 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     driveSmooth.setCurrentAndTargetValue (baseDrive * warmthToDrive (params.warmth->load()));
 }
 
-void ChannelStrip::setCabinetIR (int model, const juce::AudioBuffer<float>& ir, double irSampleRate)
+void ChannelStrip::postIR (int target, juce::AudioBuffer<float>&& ir, double irSampleRate)
 {
-    customIR[(size_t) model].makeCopyOf (ir);
-    customIRRate[(size_t) model] = irSampleRate;
+    auto* p = new PendingIR { std::move (ir), irSampleRate };
+    delete inbox[(size_t) target].exchange (p);   // an older one the audio thread never took
+}
+
+void ChannelStrip::collectGarbage()
+{
+    for (auto& o : outbox)
+        delete o.exchange (nullptr);
+}
+
+void ChannelStrip::takeNewIRs()
+{
+    for (int t = 0; t < numIRTargets; ++t)
+    {
+        if (outbox[(size_t) t].load() != nullptr)
+            continue;   // the last one hasn't been freed yet: take this one next block
+        auto* p = inbox[(size_t) t].exchange (nullptr);
+        if (p == nullptr)
+            continue;
+
+        auto& conv = t == springTank ? springConv : cabinets[(size_t) t];
+        conv.loadImpulseResponse (std::move (p->buffer), p->rate, juce::dsp::Convolution::Stereo::no,
+                                  juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no);
+        if (t == springTank)
+            useSpringIR = true;
+        outbox[(size_t) t].store (p);   // freed by collectGarbage(), never here on the audio thread
+    }
 }
 
 bool ChannelStrip::cabinetsReady() const
@@ -112,13 +138,13 @@ void ChannelStrip::applyAmpModel (int model)
     ampModel = model;
     const bool twoRock = model == 1;
 
-    toneStack.prepare (sr * 4.0, twoRock ? amp::twoRock : amp::deluxeReverb);
+    toneStack.prepare (sr * 4.0, twoRock ? amp::twoRock : amp::twinReverb);
     cabinets[(size_t) model].reset();
 
-    // Volts out of V1B that drive the power amp to full power. The 22 W Deluxe (two 6V6) runs out of clean headroom
-    // early and its supply sags; a 50-100 W Two-Rock (6L6, big transformers) stays clean and stiff far louder.
-    baseDrive = twoRock ? 1.0f / 30.0f : 1.0f / 11.0f;
-    powerAmp.setSag (twoRock ? 0.08f : 0.18f);
+    // Volts out of V1B that drive the power amp to full power. Both are big clean amps meant for pedals: the 85 W
+    // Twin Reverb (four 6L6) and a 50-100 W Two-Rock with a stiff supply.
+    baseDrive = 1.0f / 30.0f;
+    powerAmp.setSag (twoRock ? 0.08f : 0.12f);
     // Two-Rock clean channels pad the signal between preamp stages (a resistor divider, often on a gain-structure
     // switch), so the second stage stays clean much longer. The Fender feeds its volume pot straight into V1B.
     preampPad = twoRock ? 0.4f : 1.0f;
@@ -147,6 +173,7 @@ void ChannelStrip::reset()
     powerAmp.reset();
     for (auto& c : cabinets)
         c.reset();
+    springConv.reset();
     coupleState = sendHp1 = sendHp2 = 0.0f;
 }
 
@@ -177,6 +204,7 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
         overdrive.process (outL, n, params.odDrive->load(), params.odTone->load(), params.odLevel->load());
     });
 
+    takeNewIRs();
     applyAmpModel (params.ampType != nullptr && params.ampType->load() > 0.5f ? 1 : 0);
     volumeSmooth.setTargetValue (volumeTaper (params.gain->load()) * preampPad);
     driveSmooth.setTargetValue (baseDrive * warmthToDrive (params.warmth->load()));
@@ -202,25 +230,44 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
         }
     });
 
+    if ((int) sendBuf.size() < n)
+        for (auto* b : { &sendBuf, &plateL, &plateR, &springL, &springR })
+            b->resize ((size_t) n);
+
+    for (int i = 0; i < n; ++i)
+    {
+        // like the real amp's reverb driver, the tank gets a thin signal (no low-mids, so the wash doesn't muddy the
+        // tone), minus the pick attack
+        const float dry = outL[i];
+        sendHp1 += sendHpCoef * (dry - sendHp1);
+        const float s1 = dry - sendHp1;
+        sendHp2 += sendHpCoef * (s1 - sendHp2);
+        const float send = reverbDuck.process (s1 - sendHp2);
+        sendBuf[(size_t) i] = send;
+        plate.process (send, plateL[(size_t) i], plateR[(size_t) i]);
+        if (! useSpringIR)
+            spring.process (send, springL[(size_t) i], springR[(size_t) i]);
+    }
+
+    if (useSpringIR)
+    {
+        // the recorded Fender tank (a real tank is mono)
+        std::copy (sendBuf.begin(), sendBuf.begin() + n, springL.begin());
+        float* chans[1] = { springL.data() };
+        juce::dsp::AudioBlock<float> block (chans, 1, (size_t) n);
+        springConv.process (juce::dsp::ProcessContextReplacing<float> (block));
+        for (int i = 0; i < n; ++i)
+            springR[(size_t) i] = springL[(size_t) i] *= springIRGain;
+    }
+
     for (int i = 0; i < n; ++i)
     {
         const float dry = outL[i];
         const float wet = reverbSmooth.getNextValue();
         const float master = masterSmooth.getNextValue();
         const float type = reverbTypeSmooth.getNextValue();
-
-        // like the real amp's reverb driver, the tank gets a thin signal (no low-mids, so the wash doesn't muddy the
-        // tone), minus the pick attack
-        sendHp1 += sendHpCoef * (dry - sendHp1);
-        const float s1 = dry - sendHp1;
-        sendHp2 += sendHpCoef * (s1 - sendHp2);
-        const float send = reverbDuck.process (s1 - sendHp2);
-        float sl, sr2, pl, pr;
-        spring.process (send, sl, sr2);
-        plate.process (send, pl, pr);
-        const float wl = pl + type * (sl - pl);   // type 0 = plate, 1 = spring
-        const float wr = pr + type * (sr2 - pr);
-
+        const float wl = plateL[(size_t) i] + type * (springL[(size_t) i] - plateL[(size_t) i]);   // type 0 = plate, 1 = spring
+        const float wr = plateR[(size_t) i] + type * (springR[(size_t) i] - plateR[(size_t) i]);
         outL[i] = (dry + wet * wl) * master;
         outR[i] = (dry + wet * wr) * master;
     }

@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 #include "ChannelStrip.h"
+#include "IRPack.h"
 #include "Effects.h"
 #include "Metronome.h"
 #include "Params.h"
@@ -76,6 +77,18 @@ private:
     enum { in0, in1, out0L, out0R, out1L, out1R, mixL, mixR, numScratch };
 
     ChannelStrip strips[2];
+
+    // recorded cabinets and spring tank (only in builds that embed them), kept up to date with the MIC, DWELL and
+    // TONE knobs by a background thread
+    struct IRUpdater : juce::Thread
+    {
+        explicit IRUpdater (GuitarDriveProcessor& p);
+        ~IRUpdater() override;
+        void run() override;
+        GuitarDriveProcessor& owner;
+    };
+    std::unique_ptr<IRPack> irPack;
+    std::unique_ptr<IRUpdater> irUpdater;   // declared after strips and irPack, so it stops before they go
     Metronome metronome;
     juce::AudioBuffer<float> scratch { numScratch, 0 };
 

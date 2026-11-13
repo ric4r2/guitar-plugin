@@ -1,26 +1,9 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "BinaryData.h"
-#include <juce_audio_formats/juce_audio_formats.h>
 
 namespace
 {
-    // a recorded cabinet impulse response embedded from Assets/private-ir (only in builds that have the file)
-    [[maybe_unused]] bool loadEmbeddedIR (const char* data, int size, juce::AudioBuffer<float>& ir, double& rate)
-    {
-        juce::WavAudioFormat wav;
-        std::unique_ptr<juce::AudioFormatReader> reader (wav.createReaderFor (new juce::MemoryInputStream (data, (size_t) size, false), true));
-        if (reader == nullptr || reader->lengthInSamples <= 0)
-            return false;
-
-        rate = reader->sampleRate;
-        const int length = (int) juce::jmin<juce::int64> (reader->lengthInSamples, (juce::int64) (rate * 0.5));   // cabinets need no more
-        ir.setSize (1, length);
-        reader->read (&ir, 0, length, 0, true, false);   // left channel of a stereo file
-        cab::normaliseAt1k (ir, rate);
-        return true;
-    }
-
     using ParamList = std::vector<std::unique_ptr<juce::RangedAudioParameter>>;
 
     void addKnob (ParamList& p, const juce::String& id, const juce::String& name, const Params::KnobDef& k)
@@ -50,22 +33,12 @@ GuitarDriveProcessor::GuitarDriveProcessor()
     for (int s = 0; s < 2; ++s)
         panPtr[s] = raw (paramId (s, panId));
 
-    // recorded cabinets replace the built-in ones when this build has them
-    {
-        juce::AudioBuffer<float> ir;
-        double rate = 0.0;
-        juce::ignoreUnused (ir, rate);
-       #if GUITARDRIVE_IR_FENDER
-        if (loadEmbeddedIR (BinaryData::fender_wav, BinaryData::fender_wavSize, ir, rate))
-            for (auto& strip : strips)
-                strip.setCabinetIR (0, ir, rate);
-       #endif
-       #if GUITARDRIVE_IR_TWOROCK
-        if (loadEmbeddedIR (BinaryData::tworock_wav, BinaryData::tworock_wavSize, ir, rate))
-            for (auto& strip : strips)
-                strip.setCabinetIR (1, ir, rate);
-       #endif
-    }
+    // recorded cabinets and spring tank, embedded when this build has them (see tools/pack_irs.py)
+   #if GUITARDRIVE_IR_PACK
+    irPack = std::make_unique<IRPack> (BinaryData::irs_bin, (size_t) BinaryData::irs_binSize);
+    if (irPack->isValid())
+        irUpdater = std::make_unique<IRUpdater> (*this);
+   #endif
 
     metroOnPtr = raw (Params::metroOn);
     metroBpmPtr = raw (Params::metroBpm);
@@ -144,6 +117,57 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
                                                          StringArray { "Off", "Left", "Right" }, 0));
     addSwitch (p, rightSameId, "Right Uses Input 1", true);
     return { p.begin(), p.end() };
+}
+
+// ---------------------------------------------------------------- recorded IRs
+
+GuitarDriveProcessor::IRUpdater::IRUpdater (GuitarDriveProcessor& p) : juce::Thread ("IR updater"), owner (p)
+{
+    startThread (juce::Thread::Priority::low);
+}
+
+GuitarDriveProcessor::IRUpdater::~IRUpdater()
+{
+    stopThread (3000);
+}
+
+void GuitarDriveProcessor::IRUpdater::run()
+{
+    struct Seen { int prepareCount = -1; float mic = -1.0f; int dwell = -1, tone = -1; };
+    std::array<Seen, 2> seen;
+
+    while (! threadShouldExit())
+    {
+        for (int s = 0; s < 2; ++s)
+        {
+            auto& strip = owner.strips[s];
+            auto& last = seen[(size_t) s];
+            const float mic = owner.raw (paramId (s, "cab_mic"))->load();
+            const int dwell = (int) std::lround (owner.raw (paramId (s, "rev_dwell"))->load());
+            const int tone = (int) std::lround (owner.raw (paramId (s, "rev_tone"))->load());
+            const int prepared = strip.getPrepareCount();
+            const bool fresh = prepared != last.prepareCount;   // prepare() put the built-in IRs back
+
+            if (fresh || std::abs (mic - last.mic) > 0.02f)
+                for (int model = 0; model < 2; ++model)
+                {
+                    juce::AudioBuffer<float> ir;
+                    double rate = 0.0;
+                    if (owner.irPack->cabinet (model, mic, ir, rate))
+                        strip.postIR (model, std::move (ir), rate);
+                }
+            if (fresh || dwell != last.dwell || tone != last.tone)
+            {
+                juce::AudioBuffer<float> ir;
+                double rate = 0.0;
+                if (owner.irPack->springTank (dwell, tone, ir, rate))
+                    strip.postIR (ChannelStrip::springTank, std::move (ir), rate);
+            }
+            last = { prepared, mic, dwell, tone };
+            strip.collectGarbage();
+        }
+        wait (40);
+    }
 }
 
 ChannelStrip::Params GuitarDriveProcessor::paramsFor (int strip) const

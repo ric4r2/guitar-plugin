@@ -7,6 +7,7 @@
 
 #include "AmpModel.h"
 #include "CabinetIR.h"
+#include "IRPack.h"
 #include <thread>
 #include "ChannelStrip.h"
 #include "Effects.h"
@@ -737,7 +738,7 @@ namespace
         amp::ToneStack tr;
         tr.prepare (osr, amp::twoRock);
         const double trScoop = db (tr.analogMagnitude (3000.0) / tr.analogMagnitude (500.0));
-        ts.prepare (osr, amp::deluxeReverb);
+        ts.prepare (osr, amp::twinReverb);
         const double fenderScoop = db (ts.analogMagnitude (3000.0) / ts.analogMagnitude (500.0));
         std::snprintf (buf, sizeof buf, "3 kHz over 500 Hz at 5/5/5: Fender %.1f dB, Two-Rock %.1f dB", fenderScoop, trScoop);
         check ("tone stack: Two-Rock is less scooped", trScoop < fenderScoop, buf);
@@ -755,6 +756,95 @@ namespace
             check (m == 0 ? "cabinet: Fender 1x12 has a speaker's shape" : "cabinet: Two-Rock 2x12 has a speaker's shape",
                    finite && at (50.0) < -10.0 && at (120.0) > -3.0 && std::abs (at (1000.0)) < 3.0 && at (2700.0) > 0.0 && at (8000.0) < -20.0, buf);
         }
+    }
+}
+
+// ---------------------------------------------------------------- recorded IRs (only when the pack exists)
+namespace
+{
+    void testIRPack()
+    {
+        const auto file = juce::File::getCurrentWorkingDirectory().getChildFile ("Assets/private-ir/irs.bin");
+        if (! file.existsAsFile())
+        {
+            std::printf ("      (no Assets/private-ir/irs.bin here: recorded IR tests skipped)\n");
+            return;
+        }
+        juce::MemoryBlock data;
+        file.loadFileAsData (data);
+        IRPack pack (data.getData(), data.getSize());
+        check ("IR pack: loads", pack.isValid(), file.getFullPathName().toRawUTF8());
+        if (! pack.isValid())
+            return;
+
+        for (int model = 0; model < 2; ++model)
+            for (float mic : { 0.0f, 2.5f, 5.0f, 7.5f, 10.0f })
+            {
+                juce::AudioBuffer<float> ir;
+                double rate = 0.0;
+                const bool ok = pack.cabinet (model, mic, ir, rate);
+                const double at1k = ok ? cab::magnitudeAt (ir, rate, 1000.0) : 0.0;
+                std::snprintf (buf, sizeof buf, "%s mic %.1f: %.2f s, 1 kHz %.1f dB, 4 kHz %.1f dB", model == 0 ? "Fender" : "Two-Rock", mic,
+                               ok ? ir.getNumSamples() / rate : 0.0, db (at1k), ok ? db (cab::magnitudeAt (ir, rate, 4000.0)) : 0.0);
+                check ("IR pack: cabinet blends", ok && std::abs (db (at1k)) < 4.5, buf);   // level is matched over 0.8-1.25 kHz
+            }
+
+        bool allSprings = true;
+        double shortest = 1e9, longest = 0.0;
+        for (int d = 1; d <= 10; ++d)
+            for (int t = 1; t <= 10; ++t)
+            {
+                juce::AudioBuffer<float> ir;
+                double rate = 0.0;
+                allSprings = allSprings && pack.springTank (d, t, ir, rate);
+                if (rate > 0.0)
+                {
+                    shortest = std::min (shortest, ir.getNumSamples() / rate);
+                    longest = std::max (longest, ir.getNumSamples() / rate);
+                }
+            }
+        std::snprintf (buf, sizeof buf, "100 positions, %.2f s to %.2f s long", shortest, longest);
+        check ("IR pack: every Dwell / Tone position exists", allSprings, buf);
+
+        // level of the recorded tank against the plate, through a whole strip, on a held note
+        auto wetLevel = [&] (bool recorded)
+        {
+            StripFixture f;
+            f.revType = 1.0f;
+            f.reverb = 10.0f;
+            ChannelStrip strip;
+            strip.setParams (f.params());
+            strip.prepare (sr, 256);
+            if (recorded)
+            {
+                juce::AudioBuffer<float> ir;
+                double rate = 0.0;
+                pack.springTank (5, 5, ir, rate);
+                strip.postIR (ChannelStrip::springTank, std::move (ir), rate);
+            }
+            waitForCabinets (strip, 256);
+            std::vector<float> z (256, 0.0f), l (256), r (256);
+            for (int i = 0; i < 200; ++i)   // let the spring IR finish loading too
+            {
+                strip.process (z.data(), l.data(), r.data(), 256);
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+            }
+            strip.reset();
+            const auto in = sine (440.0, 0.1f, (int) sr * 2);
+            std::vector<float> outL (in.size()), outR (in.size());
+            for (size_t s = 0; s < in.size(); s += 256)
+                strip.process (in.data() + s, outL.data() + s, outR.data() + s, (int) std::min<size_t> (256, in.size() - s));
+            // the tail after the note stops is all reverb
+            std::vector<float> tail ((size_t) sr, 0.0f), tl (tail.size()), tr (tail.size());
+            for (size_t s = 0; s < tail.size(); s += 256)
+                strip.process (tail.data() + s, tl.data() + s, tr.data() + s, (int) std::min<size_t> (256, tail.size() - s));
+            strip.collectGarbage();
+            return rms (tl, 0, 9600);
+        };
+        const double algorithmic = wetLevel (false), recorded = wetLevel (true);
+        std::snprintf (buf, sizeof buf, "first 200 ms of the tail: built-in spring %.4f, recorded tank %.4f (%.1f dB)",
+                       algorithmic, recorded, db (recorded / std::max (1.0e-9, algorithmic)));
+        check ("IR pack: recorded tank plays at a similar level", recorded > 0.0 && std::abs (db (recorded / algorithmic)) < 8.0, buf);
     }
 }
 
@@ -877,6 +967,7 @@ namespace
 
 int main (int argc, char** argv)
 {
+    std::setvbuf (stdout, nullptr, _IONBF, 0);
     if (argc >= 2 && std::string (argv[1]) == "--tone")
     {
         toneReport();
@@ -907,6 +998,7 @@ int main (int argc, char** argv)
     testReverbs();
     testStrip();
     testAmp();
+    testIRPack();
     testPresets();
 
     std::printf ("\n%d failure%s\n", failures, failures == 1 ? "" : "s");

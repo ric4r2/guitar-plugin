@@ -55,7 +55,7 @@ public:
         const std::atomic<float>* reverb = nullptr;
         const std::atomic<float>* master = nullptr;
         const std::atomic<float>* revType = nullptr;   // 0 = plate, 1 = spring
-        const std::atomic<float>* ampType = nullptr;   // 0 = Fender Deluxe Reverb, 1 = Two-Rock
+        const std::atomic<float>* ampType = nullptr;   // 0 = Fender Twin Reverb, 1 = Two-Rock
 
         // pedals before the amp
         const std::atomic<float>* wahOn = nullptr;
@@ -82,11 +82,29 @@ public:
         PostPtrs post;
     };
 
+    ChannelStrip()
+    {
+        for (auto* box : { &inbox, &outbox })   // std::atomic is not zeroed for us before C++20
+            for (auto& p : *box)
+                p.store (nullptr);
+    }
+    ~ChannelStrip()
+    {
+        for (auto* box : { &inbox, &outbox })
+            for (auto& p : *box)
+                delete p.load();
+    }
+
     void setParams (const Params& p) { params = p; }
 
-    // Use a recorded cabinet impulse response instead of the built-in one for an amp (0 = Fender, 1 = Two-Rock).
-    // Call before prepare().
-    void setCabinetIR (int model, const juce::AudioBuffer<float>& ir, double irSampleRate);
+    // Recorded impulse responses, handed over from another thread (they are picked up at the start of the next block).
+    // Target 0 / 1: the Fender / Two-Rock cabinet; 2: the spring tank (replaces the built-in spring from then on).
+    enum IRTarget { fenderCabinet = 0, twoRockCabinet = 1, springTank = 2, numIRTargets = 3 };
+    void postIR (int target, juce::AudioBuffer<float>&& ir, double irSampleRate);
+    void collectGarbage();   // call from the thread that posts: frees IRs the audio thread has finished with
+    // counts prepare() calls: anything posted before the latest prepare() has to be posted again
+    int getPrepareCount() const { return prepareCount.load(); }
+
     // the cabinets load on a background thread; true once both are in use
     bool cabinetsReady() const;
     void prepare (double sampleRate, int maxBlockSize);
@@ -119,8 +137,13 @@ private:
     amp::ToneStack toneStack;
     amp::PowerAmp powerAmp;
     std::array<juce::dsp::Convolution, 2> cabinets;            // Fender and Two-Rock speaker cabinets
-    std::array<juce::AudioBuffer<float>, 2> customIR;
-    std::array<double, 2> customIRRate {};
+    juce::dsp::Convolution springConv { juce::dsp::Convolution::NonUniform { 512 } };   // recorded spring tank
+    bool useSpringIR = false;
+    struct PendingIR { juce::AudioBuffer<float> buffer; double rate = 0.0; };
+    std::array<std::atomic<PendingIR*>, numIRTargets> inbox {}, outbox {};
+    std::atomic<int> prepareCount { 0 };
+    void takeNewIRs();
+    std::vector<float> sendBuf, plateL, plateR, springL, springR;
     int ampModel = -1;
     float baseDrive = 0.125f, outputTrim = 1.0f, preampPad = 1.0f;
     float coupleState = 0.0f, coupleCoef = 0.0f;               // coupling capacitor after V1B

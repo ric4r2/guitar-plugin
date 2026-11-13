@@ -37,6 +37,8 @@ namespace amp
     // AB763 Deluxe Reverb: treble pot 250k, bass pot 250k, slope 100k, 250pF, .1uF, .047uF. The Deluxe has a fixed
     // 6.8k mid resistor; here it is a 13.6k pot so that MID at 5 is exactly the stock amp.
     inline constexpr ToneStackValues deluxeReverb { 250e3, 250e3, 13.6e3, 100e3, 250e-12, 100e-9, 47e-9 };
+    // AB763 Twin Reverb: same network with a real 10k middle pot and the smaller treble cap (Guitarix "twin" values)
+    inline constexpr ToneStackValues twinReverb { 250e3, 250e3, 10e3, 100e3, 120e-12, 100e-9, 47e-9 };
     // Two-Rock style (Dumble lineage) clean channel. Two-Rock does not publish schematics, so these are the same
     // treble/middle/bass network with the values that give its known voice: a 25k middle pot and smaller bass and
     // middle caps, so the mids are much less scooped than a blackface and the low end stays tight.

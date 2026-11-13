@@ -248,6 +248,12 @@ AmpView::AmpView (GuitarDriveProcessor& p, const juce::Image& logoImage)
 
         // transpose moves in whole semitones: one wheel notch is one semitone
         strip.knobs[1].slider.setWheelFractions (1.0 / 24.0, 1.0 / 24.0);
+        // the spring tank's DWELL and TONE have ten positions each: one notch per position
+        strip.knobs[10].slider.setWheelFractions (1.0 / 9.0, 1.0 / 9.0);
+        strip.knobs[11].slider.setWheelFractions (1.0 / 9.0, 1.0 / 9.0);
+        strip.knobs[9].slider.setTooltip ("Cabinet microphone: 0 dark, 5 balanced, 10 clean and bright. Blends the three recorded mics.");
+        strip.knobs[10].slider.setTooltip ("Spring tank DWELL: how hard the tank is driven. Higher is longer and splashier.");
+        strip.knobs[11].slider.setTooltip ("Spring tank TONE: darker to brighter reverb.");
 
         styleAmpButton (strip.revType);
         addAndMakeVisible (strip.revType);
@@ -318,7 +324,7 @@ void AmpView::layoutAmp (int index, juce::Rectangle<int> area)
     l.grille = grilleHeight >= 30 ? juce::Rectangle<int> (l.cabinet.getX() + 38, grilleTop, l.cabinet.getWidth() - 76, grilleHeight)
                                   : juce::Rectangle<int>();
 
-    constexpr int col = 98, space = 6;
+    constexpr int col = 86, space = 6;
     auto row = l.panel.reduced (8, 8);
     l.groups.clear();
 
@@ -329,23 +335,24 @@ void AmpView::layoutAmp (int index, juce::Rectangle<int> area)
         l.groups.push_back ({ title, r });
         return r;
     };
-    const auto placeKnobs = [&] (juce::Rectangle<int> group, int first, int count)
+    const auto placeKnobs = [&] (juce::Rectangle<int> group, std::initializer_list<int> which)
     {
         group.removeFromTop (14);
-        for (int k = 0; k < count; ++k)
-            strip.knobs[(size_t) (first + k)].place (group.removeFromLeft (col), 16);
+        for (int k : which)
+            strip.knobs[(size_t) k].place (group.removeFromLeft (col), 16);
         return group;   // whatever is left of the group
     };
 
     l.jack = take (stereo ? (index == 0 ? "LEFT" : "RIGHT") : "INPUT", 84);
     strip.ampType.setBounds (l.jack.removeFromBottom (38).withSizeKeepingCentre (76, 26));
-    placeKnobs (take ("PREAMP", 4 * col), 0, 4);
-    placeKnobs (take ("TONE", 3 * col), 4, 3);
-    const auto beside = placeKnobs (take ("REVERB", col + 88), 7, 1);
+    placeKnobs (take ("PREAMP", 4 * col), { 0, 1, 2, 3 });
+    placeKnobs (take ("TONE", 3 * col), { 4, 5, 6 });
+    placeKnobs (take ("CABINET", col), { 9 });
+    const auto beside = placeKnobs (take ("REVERB", 3 * col + 84), { 7, 10, 11 });
     strip.revType.setBounds (beside.withSizeKeepingCentre (76, 28));
-    placeKnobs (take ("MASTER", col), 8, 1);
+    placeKnobs (take ("MASTER", col), { 8 });
 
-    l.badge = row;   // the rest: logo and pilot light
+    l.badge = row;   // the rest: logo (when there is room) and pilot light
     l.groups.push_back ({ {}, row });
 }
 
@@ -451,13 +458,14 @@ void AmpView::paintAmp (juce::Graphics& g, int index)
 
     // logo, and the pilot jewel beside it
     const auto badge = l.badge.toFloat();
-    if (logo.isValid())
+    const bool roomForLogo = badge.getWidth() > 160.0f;
+    if (logo.isValid() && roomForLogo)
     {
         g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
         g.setOpacity (1.0f);
         g.drawImage (logo, badge.withTrimmedRight (58.0f).reduced (8.0f, 8.0f), juce::RectanglePlacement::centred);
     }
-    const juce::Point<float> lamp (badge.getRight() - 32.0f, badge.getCentreY());
+    const juce::Point<float> lamp (roomForLogo ? badge.getRight() - 32.0f : badge.getCentreX(), badge.getCentreY());
     g.setGradientFill (juce::ColourGradient (juce::Colour (0xffff4a36).withAlpha (0.55f), lamp.x, lamp.y,
                                              juce::Colours::transparentBlack, lamp.x + 34.0f, lamp.y, true));
     g.fillEllipse (lamp.x - 34.0f, lamp.y - 34.0f, 68.0f, 68.0f);
