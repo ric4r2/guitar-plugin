@@ -25,15 +25,45 @@ public:
     }
 };
 
+// Chromatic tuner shown in place of the knobs: note name, cents offset and a meter.
+class TunerView : public juce::Component, private juce::Timer
+{
+public:
+    explicit TunerView (GuitarDriveProcessor&);
+
+    void paint (juce::Graphics&) override;
+    void visibilityChanged() override;
+
+private:
+    void timerCallback() override;
+    void resetReading();
+
+    GuitarDriveProcessor& proc;
+    PitchDetector detector;
+    std::vector<float> frame;
+
+    std::array<float, 5> history {};
+    int histCount = 0, histPos = 0;
+    double lastValidMs = 0.0;
+
+    bool haveNote = false;
+    int note = 0, shownNote = -1000;
+    float cents = 0.0f, displayCents = 0.0f;
+    double hz = 0.0;
+};
+
 class GuitarDriveEditor : public juce::AudioProcessorEditor
 {
 public:
     explicit GuitarDriveEditor (GuitarDriveProcessor&);
+    ~GuitarDriveEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
+    static constexpr int numKnobs = 8;   // gain, warmth, bass, mid, treble, reverb, master, pan
+
     struct Knob
     {
         ScrollKnob slider;
@@ -41,7 +71,28 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
 
-    std::array<Knob, 6> knobs;
+    struct StripUI
+    {
+        std::array<Knob, numKnobs> knobs;
+        juce::Label name;
+        juce::TextButton solo { "SOLO" }, mute { "MUTE" };
+    };
+
+    void layoutStrip (StripUI&, juce::Rectangle<int> row, bool stereo);
+    void setStereo (bool);
+    void setTunerOpen (bool);
+    void setSolo (int state);
+    void updateSoloButtons();
+    void updateVisibility();
+
+    GuitarDriveProcessor& proc;
+    std::array<StripUI, 2> strips;
+    juce::TextButton tunerButton { "TUNER" }, stereoButton { "STEREO" };
+    TunerView tunerView;
+    juce::ParameterAttachment stereoAttach, soloAttach;
+
+    bool stereoMode = false, tunerOpen = false;
+    int soloState = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GuitarDriveEditor)
 };

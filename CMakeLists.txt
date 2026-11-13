@@ -20,7 +20,8 @@ juce_add_plugin(GuitarDrive
 
 target_sources(GuitarDrive PRIVATE
     Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    Source/PluginEditor.cpp
+    Source/ChannelStrip.cpp)
 
 target_compile_definitions(GuitarDrive PUBLIC
     JUCE_WEB_BROWSER=0
