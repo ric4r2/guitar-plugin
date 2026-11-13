@@ -1,8 +1,17 @@
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+namespace
+{
+    float gainToLinear (float knob)   { return juce::Decibels::decibelsToGain (juce::jmap (knob, 0.0f, 10.0f, -24.0f, 24.0f)); }
+    float masterToLinear (float knob) { return knob < 0.05f ? 0.0f : juce::Decibels::decibelsToGain (juce::jmap (knob, 0.0f, 10.0f, -40.0f, 10.0f)); }
+    float reverbToLinear (float knob) { return std::pow (knob / 10.0f, 1.5f); }
+    float eqKnobToDb (float knob)     { return (knob - 5.0f) * 2.4f; }   // 5 = flat, +/-12 dB at the ends
+}
 
 GuitarDriveProcessor::GuitarDriveProcessor()
     : AudioProcessor (BusesProperties()
-                          .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                          .withInput  ("Input",  juce::AudioChannelSet::mono(),   true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
 }
@@ -11,81 +20,125 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
 {
     using namespace juce;
     std::vector<std::unique_ptr<RangedAudioParameter>> p;
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "drive", 1 }, "Drive",
-                                                        NormalisableRange<float> (0.0f, 40.0f, 0.1f), 12.0f));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "tone", 1 }, "Tone (Hz)",
-                                                        NormalisableRange<float> (500.0f, 8000.0f, 1.0f, 0.4f), 3000.0f));
-    p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { "level", 1 }, "Level (dB)",
-                                                        NormalisableRange<float> (-24.0f, 6.0f, 0.1f), -6.0f));
+    auto add = [&p] (const char* id, const char* name, float def)
+    {
+        p.push_back (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name,
+                                                            NormalisableRange<float> (0.0f, 10.0f, 0.01f), def));
+    };
+    add (gainId,   "Gain",   5.0f);
+    add (bassId,   "Bass",   5.0f);
+    add (midId,    "Mid",    5.0f);
+    add (trebleId, "Treble", 5.0f);
+    add (reverbId, "Reverb", 2.5f);
+    add (masterId, "Master", 8.0f);
     return { p.begin(), p.end() };
 }
 
 bool GuitarDriveProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 {
-    // Guitar interface input is usually mono; accept mono or stereo, same in/out.
+    const auto in  = l.getMainInputChannelSet();
     const auto out = l.getMainOutputChannelSet();
-    return (out == juce::AudioChannelSet::mono() || out == juce::AudioChannelSet::stereo())
-           && out == l.getMainInputChannelSet();
+    const auto ok = [] (const juce::AudioChannelSet& s) { return s == juce::AudioChannelSet::mono() || s == juce::AudioChannelSet::stereo(); };
+    return ok (in) && ok (out);
 }
 
 void GuitarDriveProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
-    const juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) samplesPerBlock,
-                                        (juce::uint32) getTotalNumOutputChannels() };
-    toneFilter.prepare (spec);
-    oversampling.initProcessing ((size_t) samplesPerBlock);
-    oversampling.reset();
+    const juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) samplesPerBlock, 1 };
+    for (auto* f : { &bassFilter, &midFilter, &trebleFilter })
+        f->prepare (spec);
+    lastBass = lastMid = lastTreble = -1.0f;
+    updateToneStack();
 
-    driveSmooth.reset (sampleRate, 0.02);
-    levelSmooth.reset (sampleRate, 0.02);
-    driveSmooth.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("drive")->load()));
-    levelSmooth.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("level")->load()));
+    spring.prepare (sampleRate);
 
-    setLatencySamples ((int) oversampling.getLatencyInSamples());
+    gainSmooth.reset (sampleRate, 0.03);
+    reverbSmooth.reset (sampleRate, 0.03);
+    masterSmooth.reset (sampleRate, 0.03);
+    gainSmooth.setCurrentAndTargetValue (gainToLinear (param (gainId)));
+    reverbSmooth.setCurrentAndTargetValue (reverbToLinear (param (reverbId)));
+    masterSmooth.setCurrentAndTargetValue (masterToLinear (param (masterId)));
+}
+
+void GuitarDriveProcessor::updateToneStack()
+{
+    using Coeffs = juce::dsp::IIR::Coefficients<float>;
+    const float bass = param (bassId), mid = param (midId), treble = param (trebleId);
+
+    if (bass != lastBass)
+    {
+        bassFilter.coefficients = Coeffs::makeLowShelf (sr, 120.0f, 0.7f, juce::Decibels::decibelsToGain (eqKnobToDb (bass)));
+        lastBass = bass;
+    }
+    if (mid != lastMid)
+    {
+        midFilter.coefficients = Coeffs::makePeakFilter (sr, 750.0f, 0.8f, juce::Decibels::decibelsToGain (eqKnobToDb (mid)));
+        lastMid = mid;
+    }
+    if (treble != lastTreble)
+    {
+        trebleFilter.coefficients = Coeffs::makeHighShelf (sr, 3200.0f, 0.7f, juce::Decibels::decibelsToGain (eqKnobToDb (treble)));
+        lastTreble = treble;
+    }
 }
 
 void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-    const auto numCh = buffer.getNumChannels();
-    for (int ch = getTotalNumInputChannels(); ch < numCh; ++ch)
-        buffer.clear (ch, 0, buffer.getNumSamples());
+    const int n = buffer.getNumSamples();
+    const int numIn = getTotalNumInputChannels();
+    const int numOut = getTotalNumOutputChannels();
 
-    driveSmooth.setTargetValue (juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("drive")->load()));
-    levelSmooth.setTargetValue (juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("level")->load()));
-    *toneFilter.state = *juce::dsp::IIR::Coefficients<float>::makeLowPass (
-        sr, apvts.getRawParameterValue ("tone")->load());
-
-    juce::dsp::AudioBlock<float> block (buffer);
-
-    // Waveshaping at 2x oversampling to tame aliasing.
-    auto up = oversampling.processSamplesUp (block);
-    const auto upSamples = up.getNumSamples();
-    for (size_t i = 0; i < upSamples; ++i)
+    if (n == 0 || numIn == 0 || numOut == 0)
     {
-        const float g = driveSmooth.getNextValue();   // advances once per oversampled sample
-        for (size_t ch = 0; ch < up.getNumChannels(); ++ch)
-        {
-            auto* d = up.getChannelPointer (ch);
-            d[i] = std::tanh (d[i] * g);
-        }
+        buffer.clear();
+        return;
     }
-    oversampling.processSamplesDown (block);
 
-    toneFilter.process (juce::dsp::ProcessContextReplacing<float> (block));
-
-    for (int i = 0; i < buffer.getNumSamples(); ++i)
+    // The guitar is one signal. Work on channel 0 as a mono track and fan it out to every output at the end,
+    // so a mono input (the ID14's instrument input) comes out of both ears.
+    auto* mono = buffer.getWritePointer (0);
+    if (numIn > 1)
     {
-        const float lv = levelSmooth.getNextValue();
-        for (int ch = 0; ch < numCh; ++ch)
-            buffer.getWritePointer (ch)[i] *= lv;
+        const auto* right = buffer.getReadPointer (1);
+        for (int i = 0; i < n; ++i)
+            mono[i] = 0.5f * (mono[i] + right[i]);
+    }
+
+    gainSmooth.setTargetValue (gainToLinear (param (gainId)));
+    reverbSmooth.setTargetValue (reverbToLinear (param (reverbId)));
+    masterSmooth.setTargetValue (masterToLinear (param (masterId)));
+
+    for (int i = 0; i < n; ++i)
+        mono[i] *= gainSmooth.getNextValue();
+
+    updateToneStack();
+    float* chans[1] = { mono };
+    juce::dsp::AudioBlock<float> block (chans, 1, (size_t) n);
+    juce::dsp::ProcessContextReplacing<float> ctx (block);
+    bassFilter.process (ctx);
+    midFilter.process (ctx);
+    trebleFilter.process (ctx);
+
+    auto* second = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
+    for (int i = 0; i < n; ++i)
+    {
+        const float dry = mono[i];
+        const float wet = reverbSmooth.getNextValue();
+        const float master = masterSmooth.getNextValue();
+        float wl, wr;
+        spring.process (dry, wl, wr);
+
+        mono[i] = (dry + wet * wl) * master;
+        if (second != nullptr)
+            second[i] = (dry + wet * wr) * master;
     }
 }
 
 juce::AudioProcessorEditor* GuitarDriveProcessor::createEditor()
 {
-    return new juce::GenericAudioProcessorEditor (*this);
+    return new GuitarDriveEditor (*this);
 }
 
 void GuitarDriveProcessor::getStateInformation (juce::MemoryBlock& dest)

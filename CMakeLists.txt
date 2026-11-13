@@ -19,7 +19,8 @@ juce_add_plugin(GuitarDrive
     COPY_PLUGIN_AFTER_BUILD FALSE)  # TRUE copies to Program Files\Common Files\VST3 (needs admin)
 
 target_sources(GuitarDrive PRIVATE
-    Source/PluginProcessor.cpp)
+    Source/PluginProcessor.cpp
+    Source/PluginEditor.cpp)
 
 target_compile_definitions(GuitarDrive PUBLIC
     JUCE_WEB_BROWSER=0
