@@ -109,6 +109,12 @@ private:
     Filter bassFilter, midFilter, trebleFilter;
     float lastBass = -1.0f, lastMid = -1.0f, lastTreble = -1.0f;
 
+    // Built-in amp voicing, applied after the tone knobs: a gentle low-mid dip and a treble lift, like a real clean amp.
+    // Without it a guitar played straight in sounds heavy at 100-400 Hz even with every knob at 5.
+    Filter voiceMid, voiceTreble;
+    float tightState = 0.0f, tightCoef = 0.0f;               // low cut ahead of the warmth stage
+    float sendHp1 = 0.0f, sendHp2 = 0.0f, sendHpCoef = 0.0f;   // keeps low-mids out of the reverb
+
     juce::dsp::Oversampling<float> oversampling { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };   // 4x
 
     fx::ReverbDuck reverbDuck;

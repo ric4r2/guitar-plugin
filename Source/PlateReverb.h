@@ -27,9 +27,9 @@ public:
         for (int i = 0; i < numAllpass; ++i)
             allpass[(size_t) i].buf.assign ((size_t) std::max (8, (int) std::lround (apLengths[i] * scale)), 0.0f);
 
-        dampCoef = (float) (1.0 - std::exp (-twoPi * 2200.0 / sampleRate));
-        inLpCoef = (float) (1.0 - std::exp (-twoPi * 2400.0 / sampleRate));
-        inHpCoef = (float) (1.0 - std::exp (-twoPi * 150.0 / sampleRate));
+        dampCoef = (float) (1.0 - std::exp (-twoPi * 3000.0 / sampleRate));    // brighter than before: less of a dull wash
+        inLpCoef = (float) (1.0 - std::exp (-twoPi * 3400.0 / sampleRate));
+        inHpCoef = (float) (1.0 - std::exp (-twoPi * 200.0 / sampleRate));
         reset();
     }
 

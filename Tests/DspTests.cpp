@@ -610,8 +610,130 @@ namespace
     }
 }
 
+// ---------------------------------------------------------------- tone report (run with --tone)
+// Where does the sound gain or lose energy? Octave-band levels of the output compared with the input.
+namespace
+{
+    constexpr int numBands = 7;
+    const double bandEdges[numBands + 1] = { 80, 160, 320, 640, 1280, 2560, 5120, 10240 };
+
+    std::array<double, numBands> bandLevels (const std::vector<float>& x, int start)
+    {
+        constexpr int order = 16, n = 1 << order;
+        std::vector<float> data ((size_t) n * 2, 0.0f);
+        for (int i = 0; i < n && start + i < (int) x.size(); ++i)
+        {
+            const float w = 0.5f - 0.5f * std::cos (6.2831853f * (float) i / (float) (n - 1));   // Hann window
+            data[(size_t) i] = x[(size_t) (start + i)] * w;
+        }
+        juce::dsp::FFT fft (order);
+        fft.performFrequencyOnlyForwardTransform (data.data());
+
+        std::array<double, numBands> power {};
+        for (int k = 1; k < n / 2; ++k)
+        {
+            const double f = (double) k * sr / n;
+            for (int b = 0; b < numBands; ++b)
+                if (f >= bandEdges[b] && f < bandEdges[b + 1])
+                    power[(size_t) b] += (double) data[(size_t) k] * data[(size_t) k];
+        }
+        for (auto& p : power)
+            p = 10.0 * std::log10 (p + 1.0e-20);
+        return power;
+    }
+
+    std::vector<float> renderLeft (StripFixture& fixture, const std::vector<float>& in, int block = 256)
+    {
+        ChannelStrip strip;
+        strip.setParams (fixture.params());
+        strip.prepare (sr, block);
+        std::vector<float> l (in.size()), r (in.size());
+        for (size_t s = 0; s < in.size(); s += (size_t) block)
+            strip.process (in.data() + s, l.data() + s, r.data() + s, (int) std::min<size_t> ((size_t) block, in.size() - s));
+        return l;
+    }
+
+    // a strummed open-position chord: six notes a few milliseconds apart, with their harmonics
+    std::vector<float> strum (float peak, int n)
+    {
+        const double notes[6] = { 82.41, 110.0, 146.83, 196.0, 246.94, 329.63 };
+        std::vector<float> v ((size_t) n, 0.0f);
+        for (int s = 0; s < 6; ++s)
+            for (int i = 0; i < n; ++i)
+            {
+                const double t = i / sr - s * 0.02;
+                if (t < 0.0)
+                    continue;
+                double x = 0.0;
+                for (int h = 1; h <= 6; ++h)
+                    x += std::sin (6.283185307179586 * notes[s] * h * t) / h;
+                v[(size_t) i] += (float) (x * std::exp (-t / 1.2));
+            }
+        float m = 0.0f;
+        for (float x : v)
+            m = std::max (m, std::abs (x));
+        for (auto& x : v)
+            x *= peak / m;
+        return v;
+    }
+
+    void printRow (const char* name, const std::array<double, numBands>& out, const std::array<double, numBands>& in)
+    {
+        std::printf ("%-44s", name);
+        for (int b = 0; b < numBands; ++b)
+            std::printf (" %+6.1f", out[(size_t) b] - in[(size_t) b]);
+        std::printf ("\n");
+    }
+
+    void toneReport()
+    {
+        std::printf ("level change per octave band, output minus input (dB)\n%-44s", "band centre (Hz):");
+        for (int b = 0; b < numBands; ++b)
+            std::printf (" %6.0f", std::sqrt (bandEdges[b] * bandEdges[b + 1]));
+        std::printf ("\n");
+
+        // the settings in use: plate reverb at 6.6, warmth 5.1, tone knobs flat, master 8.9
+        const auto userSettings = [] (StripFixture& f) { f.warmth = 5.1f; f.reverb = 6.6f; f.master = 8.9f; };
+
+        std::vector<float> noiseIn ((size_t) (sr * 5));
+        for (auto& v : noiseIn)
+            v = noise (0.03f);
+        const auto noiseBands = bandLevels (noiseIn, 24000);
+
+        { StripFixture f; userSettings (f); f.reverb = 0.0f; f.warmth = 0.0f;
+          printRow ("quiet noise, warmth 0, no reverb", bandLevels (renderLeft (f, noiseIn), 24000), noiseBands); }
+        { StripFixture f; userSettings (f); f.reverb = 0.0f;
+          printRow ("quiet noise, warmth 5.1, no reverb", bandLevels (renderLeft (f, noiseIn), 24000), noiseBands); }
+        { StripFixture f; userSettings (f);
+          printRow ("quiet noise, warmth 5.1, plate reverb 6.6", bandLevels (renderLeft (f, noiseIn), 24000), noiseBands); }
+
+        for (float peak : { 0.15f, 0.4f, 0.8f })
+        {
+            const auto chord = strum (peak, (int) (sr * 4));
+            const auto in = bandLevels (chord, 12000);
+            char name[96];
+
+            { StripFixture f; userSettings (f); f.reverb = 0.0f; f.warmth = 0.0f;
+              std::snprintf (name, sizeof name, "chord peak %.2f, warmth 0, no reverb", peak);
+              printRow (name, bandLevels (renderLeft (f, chord), 12000), in); }
+            { StripFixture f; userSettings (f); f.reverb = 0.0f;
+              std::snprintf (name, sizeof name, "chord peak %.2f, warmth 5.1, no reverb", peak);
+              printRow (name, bandLevels (renderLeft (f, chord), 12000), in); }
+            { StripFixture f; userSettings (f);
+              std::snprintf (name, sizeof name, "chord peak %.2f, warmth 5.1, plate 6.6", peak);
+              printRow (name, bandLevels (renderLeft (f, chord), 12000), in); }
+        }
+    }
+}
+
 int main (int argc, char** argv)
 {
+    if (argc >= 2 && std::string (argv[1]) == "--tone")
+    {
+        toneReport();
+        return 0;
+    }
+
     // GuitarDriveTests --logo <output.png> [font name]: save the chrome artist logo as an image
     if (argc >= 3 && std::string (argv[1]) == "--logo")
     {

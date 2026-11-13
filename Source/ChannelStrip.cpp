@@ -46,10 +46,16 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     odSwitch.prepare (sampleRate, params.odOn->load() > 0.5f);
 
     const juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) maxBlockSize, 1 };
-    for (auto* f : { &bassFilter, &midFilter, &trebleFilter })
+    for (auto* f : { &bassFilter, &midFilter, &trebleFilter, &voiceMid, &voiceTreble })
         f->prepare (spec);
     lastBass = lastMid = lastTreble = -1.0f;
     updateToneStack();
+
+    voiceMid.coefficients = juce::dsp::IIR::Coefficients<float>::makePeakFilter (sampleRate, 330.0f, 0.6f, fx::dbToGain (-2.5f));
+    voiceTreble.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf (sampleRate, 2800.0f, 0.7f, fx::dbToGain (2.0f));
+    tightCoef = (float) (1.0 - std::exp (-juce::MathConstants<double>::twoPi * 70.0 / sampleRate));
+    sendHpCoef = (float) (1.0 - std::exp (-juce::MathConstants<double>::twoPi * 300.0 / sampleRate));
+    tightState = sendHp1 = sendHp2 = 0.0f;
 
     oversampling.initProcessing ((size_t) maxBlockSize);
     oversampling.reset();
@@ -85,9 +91,9 @@ void ChannelStrip::reset()
     plate.reset();
     post.reset();
     oversampling.reset();
-    for (auto* f : { &bassFilter, &midFilter, &trebleFilter })
+    for (auto* f : { &bassFilter, &midFilter, &trebleFilter, &voiceMid, &voiceTreble })
         f->reset();
-    dcState = toneState = 0.0f;
+    dcState = toneState = tightState = sendHp1 = sendHp2 = 0.0f;
 }
 
 void ChannelStrip::updateToneStack()
@@ -147,7 +153,11 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     reverbTypeSmooth.setTargetValue (params.revType->load() > 0.5f ? 1.0f : 0.0f);
 
     for (int i = 0; i < n; ++i)
-        outL[i] *= gainSmooth.getNextValue();
+    {
+        const float v = outL[i] * gainSmooth.getNextValue();
+        tightState += tightCoef * (v - tightState);   // low cut before the tube stage keeps the lows from smearing into mud
+        outL[i] = v - tightState;
+    }
 
     // Tube stage at 4x oversampling so the added harmonics don't alias into fizz on fast attacks.
     fx::processOversampled (oversampling, outL, n, maxBlock, [&] (float* d, size_t count)
@@ -186,6 +196,8 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     bassFilter.process (ctx);
     midFilter.process (ctx);
     trebleFilter.process (ctx);
+    voiceMid.process (ctx);
+    voiceTreble.process (ctx);
 
     for (int i = 0; i < n; ++i)
     {
@@ -194,7 +206,11 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
         const float master = masterSmooth.getNextValue();
         const float type = reverbTypeSmooth.getNextValue();
 
-        const float send = reverbDuck.process (dry);   // the pick attack stays out of the reverb
+        // the reverb gets a thinner signal (no low-mids, so the wash doesn't muddy the tone), minus the pick attack
+        sendHp1 += sendHpCoef * (dry - sendHp1);
+        const float s1 = dry - sendHp1;
+        sendHp2 += sendHpCoef * (s1 - sendHp2);
+        const float send = reverbDuck.process (s1 - sendHp2);
         float sl, sr2, pl, pr;
         spring.process (send, sl, sr2);
         plate.process (send, pl, pr);
