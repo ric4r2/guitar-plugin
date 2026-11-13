@@ -44,6 +44,13 @@ if(GUITARDRIVE_BUILD_TESTS)
     target_link_libraries(GuitarDriveTests PRIVATE
         juce::juce_audio_utils juce::juce_dsp
         juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+    # renders every view of the window to PNG files, to check the look without opening the program
+    add_executable(GuitarDriveSnapshot Tests/Snapshot.cpp)
+    target_compile_features(GuitarDriveSnapshot PRIVATE cxx_std_17)
+    target_include_directories(GuitarDriveSnapshot PRIVATE Source $<TARGET_PROPERTY:GuitarDrive,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(GuitarDriveSnapshot PRIVATE $<TARGET_PROPERTY:GuitarDrive,COMPILE_DEFINITIONS>)
+    target_link_libraries(GuitarDriveSnapshot PRIVATE GuitarDrive juce::juce_recommended_config_flags)
 endif()
 
 # Optional ASIO for the Standalone app: -DASIO_SDK_DIR=<path to ASIOSDK folder containing common/>

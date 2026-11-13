@@ -14,9 +14,20 @@ public:
     void paintButton (juce::Graphics& g, bool highlighted, bool down) override
     {
         auto area = getLocalBounds().toFloat();
-        const auto colour = ! isEnabled() ? juce::Colours::white.withAlpha (0.22f)
+        const auto colour = ! isEnabled() ? Palette::text.withAlpha (0.22f)
                           : getToggleState() ? Palette::amber
-                          : (highlighted || down) ? juce::Colours::white : juce::Colours::white.withAlpha (0.72f);
+                          : (highlighted || down) ? Palette::text : Palette::text.withAlpha (0.72f);
+
+        if (getToggleState())   // a small pilot lamp under the chosen tab
+        {
+            const juce::Point<float> lamp (area.getCentreX(), area.getBottom() - 1.5f);
+            g.setGradientFill (juce::ColourGradient (Palette::amber.withAlpha (0.55f), lamp.x, lamp.y,
+                                                     Palette::amber.withAlpha (0.0f), lamp.x + 10.0f, lamp.y, true));
+            g.fillEllipse (lamp.x - 10.0f, lamp.y - 10.0f, 20.0f, 20.0f);
+            g.setColour (Palette::amber);
+            g.fillEllipse (lamp.x - 2.0f, lamp.y - 2.0f, 4.0f, 4.0f);
+            area.removeFromBottom (4.0f);
+        }
 
         if (caption.isNotEmpty())
         {
@@ -120,10 +131,15 @@ public:
         const auto pill = juce::Rectangle<float> (26.0f, r.getHeight() - 4.0f).withPosition (r.getX() + 2.0f, r.getY() + 2.0f);
         const bool on = getToggleState();
 
-        g.setColour (juce::Colours::white.withAlpha (highlighted ? 1.0f : 0.85f));
+        g.setColour (Palette::feltDeep);
+        g.fillRoundedRectangle (pill, 13.0f);
+        g.setColour (Palette::brass.withAlpha (highlighted ? 1.0f : 0.8f));
         g.drawRoundedRectangle (pill, 13.0f, 2.0f);
-        const float d = 14.0f;
-        g.fillEllipse (pill.getCentreX() - d * 0.5f, on ? pill.getY() + 6.0f : pill.getBottom() - 6.0f - d, d, d);
+        const float d = 15.0f;
+        const auto ball = juce::Rectangle<float> (d, d).withCentre ({ pill.getCentreX(), on ? pill.getY() + 6.0f + d * 0.5f : pill.getBottom() - 6.0f - d * 0.5f });
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfffff4d6), ball.getX() + 3.0f, ball.getY() + 3.0f,
+                                                 juce::Colour (0xffb7a377), ball.getRight(), ball.getBottom(), true));
+        g.fillEllipse (ball);
 
         const auto words = r.withTrimmedLeft (40.0f);
         g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
@@ -209,16 +225,31 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        // a column of small lamps in a brass frame: cream, then amber near the top, red at clipping
         const auto r = getLocalBounds().toFloat();
-        g.setColour (juce::Colour (0xff2a2a2d));
-        g.fillRoundedRectangle (r, 2.0f);
+        g.setColour (Palette::feltDeep);
+        g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (Palette::brass.withAlpha (0.55f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 3.0f, 1.0f);
 
         const float db = juce::Decibels::gainToDecibels (level, -60.0f);
         const float norm = juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
-        if (norm > 0.0f)
+        const auto inner = r.reduced (2.5f, 3.0f);
+        const int count = juce::jmax (6, (int) (inner.getHeight() / 7.0f));
+        const float segH = inner.getHeight() / (float) count;
+        for (int k = 0; k < count; ++k)
         {
-            g.setColour (db > -1.0f ? Palette::red : db > -6.0f ? Palette::amber : Palette::text);
-            g.fillRoundedRectangle (r.withTop (r.getBottom() - r.getHeight() * norm), 2.0f);
+            const float segDb = -60.0f + 60.0f * (float) (k + 1) / (float) count;
+            const auto colour = segDb > -1.5f ? Palette::red : segDb > -8.0f ? Palette::amber : Palette::text;
+            const bool lit = norm * (float) count > (float) k;
+            const auto seg = juce::Rectangle<float> (inner.getX(), inner.getBottom() - segH * (float) (k + 1), inner.getWidth(), segH).reduced (0.0f, 1.0f);
+            g.setColour (lit ? colour : colour.withAlpha (0.10f));
+            g.fillRoundedRectangle (seg, 1.5f);
+            if (lit)
+            {
+                g.setColour (colour.withAlpha (0.25f));
+                g.fillRoundedRectangle (seg.expanded (1.5f, 1.0f), 2.0f);
+            }
         }
     }
 

@@ -333,6 +333,9 @@ public:
     void paint (juce::Graphics&) override {}
     void resized() override;
 
+    // for the snapshot tool: 0 wah, 1 pre effects, 2 amp, 3 equalizer, 4 post effects
+    void showView (int index) { setView ((View) juce::jlimit (0, 4, index)); }
+
 private:
     enum class View { wah = 0, pre, amp, eq, post };
 
@@ -389,6 +392,7 @@ private:
 
     juce::Rectangle<int> bodyRect, footerRect;
     int designH = 714, bodyH = monoBodyH, soloState = 0;
+    juce::Image backdrop;   // green frame texture, made at the design size
     View view = View::amp;
     bool stereoMode = false, tunerOpen = false, rightUsesIn1 = true, sizeInitialised = false;
 

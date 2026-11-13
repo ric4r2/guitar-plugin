@@ -4,6 +4,28 @@
 // Procedural surface textures, generated once per size.
 namespace Textures
 {
+    // The frame: dark green with a fine grain, a soft light in the middle and darker corners.
+    inline juce::Image felt (int w, int h)
+    {
+        juce::Image img (juce::Image::RGB, w, h, true);
+        juce::Graphics g (img);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1b3a2a), (float) w * 0.5f, (float) h * 0.38f,
+                                                 juce::Colour (0xff07140d), 0.0f, 0.0f, true));
+        g.fillAll();
+
+        juce::Random rng (1974);
+        for (int i = 0; i < w * h / 6; ++i)
+        {
+            const int x = rng.nextInt (w), y = rng.nextInt (h);
+            g.setColour (rng.nextBool() ? juce::Colour (0x0affffff) : juce::Colour (0x12000000));
+            g.fillRect (x, y, 1, 1);
+        }
+        g.setColour (juce::Colour (0x06f1e6c4));   // faint horizontal weave
+        for (int y = 0; y < h; y += 3)
+            g.drawHorizontalLine (y, 0.0f, (float) w);
+        return img;
+    }
+
     // Tweed amp covering: cream-yellow weave with brown stripes down both sides.
     inline juce::Image tweed (int w, int h)
     {

@@ -56,12 +56,42 @@ namespace
 
     void drawEnclosure (juce::Graphics& g, juce::Rectangle<float> b, const juce::Image& brushed, juce::Colour side)
     {
-        g.setGradientFill (juce::ColourGradient (side.brighter (0.2f), b.getX(), b.getY(), side.darker (0.5f), b.getX(), b.getBottom(), false));
-        g.fillRoundedRectangle (b, 18.0f);
-        g.setColour (side.darker (0.75f));
+        // soft shadow on the floor, deepest right under the pedal
+        for (int i = 6; i >= 1; --i)
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.07f));
+            g.fillRoundedRectangle (b.translated (0.0f, 4.0f + (float) i).expanded ((float) i * 0.8f - 2.0f, 0.0f), 18.0f + (float) i);
+        }
+
+        // die-cast body: the colored walls, lit from above
+        juce::Path body;
+        body.addRoundedRectangle (b, 18.0f);
+        g.setGradientFill (juce::ColourGradient (side.brighter (0.35f), b.getX(), b.getY(), side.darker (0.35f), b.getX(), b.getBottom(), false));
+        g.fillPath (body);
+        {
+            // the front wall, seen from slightly above: darker, with a lit lip where it meets the top
+            juce::Graphics::ScopedSaveState save (g);
+            g.reduceClipRegion (body);
+            const auto front = b.withTop (b.getBottom() - baseDepth - 4.0f);
+            g.setGradientFill (juce::ColourGradient (side.darker (0.25f), front.getX(), front.getY(), side.darker (0.9f), front.getX(), front.getBottom(), false));
+            g.fillRect (front);
+            g.setColour (side.brighter (0.6f).withAlpha (0.55f));
+            g.drawHorizontalLine ((int) front.getY(), front.getX(), front.getRight());
+            // side walls catch less light
+            g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.25f), b.getX(), 0.0f, juce::Colours::transparentBlack, b.getX() + 14.0f, 0.0f, false));
+            g.fillRect (b.withWidth (14.0f));
+            g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.3f), b.getRight(), 0.0f, juce::Colours::transparentBlack, b.getRight() - 14.0f, 0.0f, false));
+            g.fillRect (b.withLeft (b.getRight() - 14.0f));
+        }
+        g.setColour (juce::Colours::white.withAlpha (0.35f));                      // highlight along the top edge
+        g.drawRoundedRectangle (b.reduced (1.5f).withTrimmedBottom (b.getHeight() * 0.5f), 17.0f, 1.2f);
+        g.setColour (side.darker (0.85f));
         g.drawRoundedRectangle (b.reduced (0.5f), 18.0f, 1.0f);
 
+        // brushed aluminum top plate, sitting slightly proud of the body
         const auto face = pedalFace (b);
+        g.setColour (juce::Colours::black.withAlpha (0.4f));
+        g.fillRoundedRectangle (face.translated (0.0f, 2.5f).expanded (1.0f), 14.0f);
         {
             juce::Graphics::ScopedSaveState save (g);
             juce::Path clip;
@@ -69,11 +99,33 @@ namespace
             g.reduceClipRegion (clip);
             g.setOpacity (1.0f);
             g.drawImageAt (brushed, 0, 0);
+            // a diagonal sheen across the metal
+            g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.0f), face.getX(), face.getY(),
+                                                     juce::Colours::white.withAlpha (0.0f), face.getRight(), face.getBottom(), false));
+            juce::ColourGradient sheen (juce::Colours::white.withAlpha (0.0f), face.getX(), face.getY() + face.getHeight() * 0.1f,
+                                        juce::Colours::white.withAlpha (0.0f), face.getRight(), face.getBottom() - face.getHeight() * 0.1f, false);
+            sheen.addColour (0.38, juce::Colours::white.withAlpha (0.0f));
+            sheen.addColour (0.46, juce::Colours::white.withAlpha (0.16f));
+            sheen.addColour (0.56, juce::Colours::white.withAlpha (0.0f));
+            g.setGradientFill (sheen);
+            g.fillRect (face);
+            // darker toward the bottom: the light comes from above
+            g.setGradientFill (juce::ColourGradient (juce::Colours::transparentBlack, 0.0f, face.getCentreY(),
+                                                     juce::Colours::black.withAlpha (0.14f), 0.0f, face.getBottom(), false));
+            g.fillRect (face);
         }
-        g.setColour (juce::Colours::white.withAlpha (0.6f));
-        g.drawRoundedRectangle (face.reduced (1.2f), 12.0f, 1.0f);
-        g.setColour (juce::Colour (0xff35383d));
-        g.drawRoundedRectangle (face, 13.0f, 1.2f);
+        // bevelled edge: bright on top, shaded underneath
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.85f), 0.0f, face.getY(),
+                                                 juce::Colours::black.withAlpha (0.35f), 0.0f, face.getBottom(), false));
+        g.drawRoundedRectangle (face.reduced (1.0f), 12.0f, 1.8f);
+        g.setColour (juce::Colour (0xff2c2f33));
+        g.drawRoundedRectangle (face, 13.0f, 1.0f);
+
+        // four screws holding the plate on
+        const float inset = 10.0f;
+        for (auto p : { juce::Point<float> (face.getX() + inset, face.getY() + inset), juce::Point<float> (face.getRight() - inset, face.getY() + inset),
+                        juce::Point<float> (face.getX() + inset, face.getBottom() - inset), juce::Point<float> (face.getRight() - inset, face.getBottom() - inset) })
+            drawScrew (g, p, 3.4f);
     }
 
     void styleAmpButton (juce::TextButton& b)
@@ -744,7 +796,7 @@ EqView::EqView (juce::AudioProcessorValueTreeState& apvts, int strip)
     onAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, GuitarDriveProcessor::paramId (strip, Params::eqOn), footSwitch);
     addAndMakeVisible (footSwitch);
 
-    const juce::Colour cap (0xfff4f5f7);   // bright white fader caps on a black rack unit
+    const juce::Colour cap (0xffe9dfc2);   // cream fader caps on a black rack unit
     for (int b = 0; b < Params::numEqBands; ++b)
     {
         auto& band = bands[(size_t) b];
@@ -777,7 +829,7 @@ void EqView::updateCurve()
 void EqView::resized()
 {
     const auto pedal = getLocalBounds().withSizeKeepingCentre (juce::jmin (1080, getWidth() - 40), juce::jmin (410, getHeight() - 16));
-    auto area = pedalFace (pedal.toFloat()).toNearestInt().reduced (18, 10);
+    auto area = pedalFace (pedal.toFloat()).toNearestInt().reduced (58, 14);   // inside the rack ears
 
     auto top = area.removeFromTop (juce::jmin (110, area.getHeight() / 3));
     auto side = top.removeFromRight (170);
@@ -803,27 +855,66 @@ void EqView::paint (juce::Graphics& g)
         brushed = Textures::brushedAluminum (getWidth(), getHeight(), 99);
 
     const auto pedal = getLocalBounds().withSizeKeepingCentre (juce::jmin (1080, getWidth() - 40), juce::jmin (410, getHeight() - 16));
-    // a black rack unit: dark body, darker face with a thin blue line around it
-    const juce::Colour blue (0xffbcd8ec);
     const auto body = pedal.toFloat();
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff3a3a3d), body.getX(), body.getY(), juce::Colour (0xff1c1c1e), body.getX(), body.getBottom(), false));
-    g.fillRoundedRectangle (body, 14.0f);
-    const auto face = pedalFace (body);
-    g.setColour (juce::Colour (0xff161618));
-    g.fillRoundedRectangle (face, 10.0f);
-    g.setColour (juce::Colour (0xff42a9ff).withAlpha (0.7f));
-    g.drawRoundedRectangle (face.reduced (2.0f), 9.0f, 1.2f);
 
-    g.setColour (blue);
+    // shadow under the unit
+    for (int i = 6; i >= 1; --i)
+    {
+        g.setColour (juce::Colours::black.withAlpha (0.07f));
+        g.fillRoundedRectangle (body.translated (0.0f, 4.0f + (float) i).expanded ((float) i * 0.8f - 2.0f, 0.0f), 10.0f + (float) i);
+    }
+
+    // rack ears: brushed steel with two slotted mounting holes each
+    const float earW = 40.0f;
+    for (auto ear : { body.withWidth (earW), body.withLeft (body.getRight() - earW) })
+    {
+        juce::Graphics::ScopedSaveState save (g);
+        juce::Path clip;
+        clip.addRoundedRectangle (ear, 8.0f);
+        g.reduceClipRegion (clip);
+        g.setOpacity (1.0f);
+        g.drawImageAt (brushed, 0, 0);
+        g.setColour (juce::Colours::black.withAlpha (0.25f));
+        g.fillRect (ear);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.6f), 0.0f, ear.getY(), juce::Colours::black.withAlpha (0.4f), 0.0f, ear.getBottom(), false));
+        g.drawRoundedRectangle (ear.reduced (1.0f), 7.0f, 1.5f);
+        for (float fy : { 0.18f, 0.82f })
+        {
+            const auto hole = juce::Rectangle<float> (12.0f, 22.0f).withCentre ({ ear.getCentreX(), ear.getY() + ear.getHeight() * fy });
+            g.setColour (juce::Colour (0xff050505));
+            g.fillRoundedRectangle (hole, 6.0f);
+            g.setColour (juce::Colours::white.withAlpha (0.3f));
+            g.drawRoundedRectangle (hole.translated (0.0f, 1.0f), 6.0f, 0.8f);
+            drawScrew (g, hole.getCentre(), 5.0f);
+        }
+    }
+
+    // the chassis between the ears: black anodised, lit along the top
+    const auto chassis = body.reduced (earW - 2.0f, 0.0f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff3c3d40), chassis.getX(), chassis.getY(), juce::Colour (0xff121214), chassis.getX(), chassis.getBottom(), false));
+    g.fillRoundedRectangle (chassis, 6.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.3f));
+    g.drawHorizontalLine ((int) chassis.getY() + 1, chassis.getX() + 6.0f, chassis.getRight() - 6.0f);
+
+    // recessed front panel with a brass pinstripe
+    const auto face = pedalFace (body).reduced (earW - 6.0f, 0.0f);
+    g.setColour (juce::Colour (0xff0d0e0f));
+    g.fillRoundedRectangle (face, 8.0f);
+    g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.7f), 0.0f, face.getY(), juce::Colours::white.withAlpha (0.18f), 0.0f, face.getBottom(), false));
+    g.drawRoundedRectangle (face, 8.0f, 2.0f);   // inner shadow at the top, a lit lip at the bottom
+    g.setColour (Palette::brass.withAlpha (0.55f));
+    g.drawRoundedRectangle (face.reduced (6.0f), 6.0f, 1.0f);
+
+    g.setColour (Palette::text);
     g.setFont (scriptFont (juce::jmin (40.0f, (float) titleArea.getHeight() * 0.9f)));
     g.drawText ("Equalizer", titleArea, juce::Justification::centred);
 
-    // response display
+    // response display: a dark green screen behind glass, in a brass bezel
     const auto r = curveArea.toFloat();
-    g.setColour (juce::Colour (0xff0d0e10));
+    g.setColour (Palette::brassDark);
+    g.fillRoundedRectangle (r.expanded (3.0f), 8.0f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff10261b), r.getCentreX(), r.getCentreY(), juce::Colour (0xff030a06), r.getX(), r.getY(), true));
     g.fillRoundedRectangle (r, 6.0f);
-    g.setColour (juce::Colour (0xff35383d));
-    g.drawRoundedRectangle (r, 6.0f, 1.2f);
 
     const float centreY = r.getCentreY(), halfH = r.getHeight() * 0.40f;
     const auto xForFreq = [&] (float f) { return r.getX() + std::log (f / 30.0f) / std::log (16000.0f / 30.0f) * r.getWidth(); };
@@ -851,8 +942,14 @@ void EqView::paint (juce::Graphics& g)
         else
             path.lineTo (x, y);
     }
+    g.setColour (Palette::amber.withAlpha (0.25f));   // phosphor glow
+    g.strokePath (path, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.setColour (Palette::amber);
-    g.strokePath (path, juce::PathStrokeType (2.2f));
+    g.strokePath (path, juce::PathStrokeType (2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.10f), r.getX(), r.getY(),
+                                             juce::Colours::transparentWhite, r.getX(), r.getY() + r.getHeight() * 0.45f, false));
+    g.fillRoundedRectangle (r.withHeight (r.getHeight() * 0.45f), 6.0f);   // glass reflection
 }
 
 // ---------------------------------------------------------------- footer: tuner and metronome
@@ -904,8 +1001,8 @@ FooterBar::FooterBar (GuitarDriveProcessor& p)
         addAndMakeVisible (*box);
     }
 
-    tapButton.setColour (juce::TextButton::buttonColourId, juce::Colours::black);
-    tapButton.setColour (juce::ComboBox::outlineColourId, juce::Colours::white);
+    tapButton.setColour (juce::TextButton::buttonColourId, Palette::feltDeep);
+    tapButton.setColour (juce::ComboBox::outlineColourId, Palette::brass);
     tapButton.onClick = [this] { tap(); };
     addAndMakeVisible (tapButton);
 
@@ -997,7 +1094,8 @@ PresetBar::PresetBar (GuitarDriveProcessor& p)
     newButton.onClick = [this] { saveAsNew(); };
     deleteButton.onClick = [this] { askDelete(); };
 
-    nameButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff222225));
+    nameButton.setColour (juce::TextButton::buttonColourId, Palette::feltDeep);
+    nameButton.setColour (juce::ComboBox::outlineColourId, Palette::brass);
     nameButton.setColour (juce::TextButton::textColourOffId, Palette::text);
     nameButton.setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
 
@@ -1474,7 +1572,46 @@ void GuitarDriveEditor::layout()
 
 void GuitarDriveEditor::paintRoot (juce::Graphics& g)
 {
-    g.fillAll (juce::Colours::black);
+    if (backdrop.isNull() || backdrop.getWidth() != designW || backdrop.getHeight() != designH)
+        backdrop = Textures::felt (designW, designH);
+    g.setOpacity (1.0f);
+    g.drawImageAt (backdrop, 0, 0);
+
+    // a double cream pinstripe around the edge, with art-deco corners
+    {
+        const auto outer = juce::Rectangle<float> (0.0f, 0.0f, (float) designW, (float) designH).reduced (7.0f);
+        g.setColour (Palette::text.withAlpha (0.45f));
+        g.drawRoundedRectangle (outer, 10.0f, 1.2f);
+        g.setColour (Palette::brass.withAlpha (0.35f));
+        g.drawRoundedRectangle (outer.reduced (4.0f), 7.0f, 0.8f);
+        for (auto corner : { outer.getTopLeft(), outer.getTopRight(), outer.getBottomLeft(), outer.getBottomRight() })
+        {
+            const float sx = corner.x < (float) designW * 0.5f ? 1.0f : -1.0f;
+            const float sy = corner.y < (float) designH * 0.5f ? 1.0f : -1.0f;
+            const auto c = corner + juce::Point<float> (sx * 16.0f, sy * 16.0f);
+            juce::Path diamond;
+            diamond.addPolygon (c, 4, 5.0f, juce::MathConstants<float>::pi * 0.25f);
+            g.setColour (Palette::brass.withAlpha (0.8f));
+            g.fillPath (diamond);
+            g.setColour (Palette::text.withAlpha (0.35f));
+            g.drawLine (c.x + sx * 9.0f, c.y, c.x + sx * 38.0f, c.y, 1.0f);
+            g.drawLine (c.x, c.y + sy * 9.0f, c.x, c.y + sy * 38.0f, 1.0f);
+        }
+    }
+
+    // pinstripes under the top bar and above the footer, each with a small brass diamond in the middle
+    for (float y : { (float) topH - 4.0f, (float) (designH - footerH) + 2.0f })
+    {
+        juce::ColourGradient line (Palette::text.withAlpha (0.0f), 30.0f, y, Palette::text.withAlpha (0.0f), (float) designW - 30.0f, y, false);
+        line.addColour (0.2, Palette::text.withAlpha (0.4f));
+        line.addColour (0.8, Palette::text.withAlpha (0.4f));
+        g.setGradientFill (line);
+        g.fillRect (30.0f, y - 0.5f, (float) designW - 60.0f, 1.0f);
+        juce::Path diamond;
+        diamond.addPolygon ({ (float) designW * 0.5f, y }, 4, 4.5f, juce::MathConstants<float>::pi * 0.25f);
+        g.setColour (Palette::brass);
+        g.fillPath (diamond);
+    }
 
     // the artist logo, top right
     if (logoImage.isValid())
@@ -1493,7 +1630,7 @@ void GuitarDriveEditor::paintRoot (juce::Graphics& g)
     const bool pedalView = ! tunerOpen && view != View::amp;
     if (pedalView && stereoMode)   // left channel above, right channel below
     {
-        g.setColour (juce::Colours::white.withAlpha (0.18f));
+        g.setColour (Palette::text.withAlpha (0.25f));
         g.drawHorizontalLine (channelRect (1).getY() - gap / 2, 24.0f, (float) designW - 24.0f);
 
         g.setColour (Palette::text);
