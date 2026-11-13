@@ -273,6 +273,11 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         right[i] *= g;
     }
 
+    {
+        const auto range = juce::FloatVectorOperations::findMinAndMax (left, n);
+        inputPeak.store (std::max (inputPeak.load(), std::max (std::abs (range.getStart()), std::abs (range.getEnd()))));
+    }
+
     const bool tuning = tunerActive.load();
     if (tuning)
     {
@@ -370,11 +375,13 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     float* outL = buffer.getWritePointer (0);
     float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
+    float outPeak = 0.0f;
     for (int i = 0; i < n; ++i)
     {
         const float gain = switchFade.getNextValue() * muteSmooth.getNextValue() * outputGain.getNextValue();
         const float l = mixLp[i] * gain;
         const float r = mixRp[i] * gain;
+        outPeak = std::max (outPeak, std::max (std::abs (l), std::abs (r)));
 
         if (outR != nullptr)
         {
@@ -386,6 +393,7 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             outL[i] = 0.5f * (l + r);
         }
     }
+    outputPeak.store (std::max (outputPeak.load(), outPeak));
 }
 
 juce::AudioProcessorEditor* GuitarDriveProcessor::createEditor()

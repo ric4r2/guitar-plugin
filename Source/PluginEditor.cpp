@@ -12,6 +12,29 @@ namespace
         return juce::ImageFileFormat::loadFrom (BinaryData::joegarcialogo_png, (size_t) BinaryData::joegarcialogo_pngSize);
     }
 
+    bool fontInstalled (const juce::String& name)
+    {
+        static const juce::StringArray names = juce::Font::findAllTypefaceNames();
+        return names.contains (name);
+    }
+
+    // script lettering for the pedal names
+    juce::Font scriptFont (float height)
+    {
+        if (fontInstalled ("Brush Script MT"))
+            return juce::Font (juce::FontOptions ("Brush Script MT", height, juce::Font::italic));
+        return juce::Font (juce::FontOptions (height, juce::Font::bold | juce::Font::italic));
+    }
+
+    juce::String titleCase (const juce::String& text)
+    {
+        juce::StringArray words;
+        words.addTokens (text.toLowerCase(), " ", "");
+        for (auto& w : words)
+            w = w.substring (0, 1).toUpperCase() + w.substring (1);
+        return words.joinIntoString (" ");
+    }
+
     void drawScrew (juce::Graphics& g, juce::Point<float> c, float r)
     {
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff0f1f3), c.x - r * 0.4f, c.y - r * 0.5f,
@@ -22,28 +45,35 @@ namespace
         g.drawLine (c.x - r * 0.65f, c.y + r * 0.3f, c.x + r * 0.65f, c.y - r * 0.3f, 1.4f);
     }
 
-    // Brushed-aluminum stompbox body with a soft shadow, bevel and four screws.
-    void drawEnclosure (juce::Graphics& g, juce::Rectangle<float> b, const juce::Image& brushed, float screwRadius = 3.6f)
+    // A pedal seen slightly from above: the colored enclosure shows as a rim and a deeper edge along the bottom,
+    // with a brushed aluminum face on top.
+    constexpr float baseDepth = 18.0f;
+
+    juce::Rectangle<float> pedalFace (juce::Rectangle<float> bounds)
     {
-        constexpr float corner = 12.0f;
-        g.setColour (juce::Colours::black.withAlpha (0.55f));
-        g.fillRoundedRectangle (b.translated (0.0f, 4.0f), corner);
+        return bounds.reduced (6.0f).withTrimmedBottom (baseDepth);
+    }
+
+    void drawEnclosure (juce::Graphics& g, juce::Rectangle<float> b, const juce::Image& brushed, juce::Colour side)
+    {
+        g.setGradientFill (juce::ColourGradient (side.brighter (0.2f), b.getX(), b.getY(), side.darker (0.5f), b.getX(), b.getBottom(), false));
+        g.fillRoundedRectangle (b, 18.0f);
+        g.setColour (side.darker (0.75f));
+        g.drawRoundedRectangle (b.reduced (0.5f), 18.0f, 1.0f);
+
+        const auto face = pedalFace (b);
         {
             juce::Graphics::ScopedSaveState save (g);
             juce::Path clip;
-            clip.addRoundedRectangle (b, corner);
+            clip.addRoundedRectangle (face, 13.0f);
             g.reduceClipRegion (clip);
+            g.setOpacity (1.0f);
             g.drawImageAt (brushed, 0, 0);
         }
-        g.setColour (juce::Colours::white.withAlpha (0.55f));
-        g.drawRoundedRectangle (b.reduced (1.5f), corner - 1.0f, 1.2f);
-        g.setColour (juce::Colour (0xff383b40));
-        g.drawRoundedRectangle (b, corner, 1.6f);
-
-        drawScrew (g, { b.getX() + 11.0f, b.getY() + 11.0f }, screwRadius);
-        drawScrew (g, { b.getRight() - 11.0f, b.getY() + 11.0f }, screwRadius);
-        drawScrew (g, { b.getX() + 11.0f, b.getBottom() - 11.0f }, screwRadius);
-        drawScrew (g, { b.getRight() - 11.0f, b.getBottom() - 11.0f }, screwRadius);
+        g.setColour (juce::Colours::white.withAlpha (0.6f));
+        g.drawRoundedRectangle (face.reduced (1.2f), 12.0f, 1.0f);
+        g.setColour (juce::Colour (0xff35383d));
+        g.drawRoundedRectangle (face, 13.0f, 1.2f);
     }
 
     void styleAmpButton (juce::TextButton& b)
@@ -52,16 +82,7 @@ namespace
         b.setColour (juce::TextButton::buttonOnColourId, Palette::amber);
         b.setColour (juce::TextButton::textColourOffId, Palette::cream);
         b.setColour (juce::TextButton::textColourOnId, Palette::inkDark);
-        b.setColour (juce::ComboBox::outlineColourId, Palette::silver);
-    }
-
-    void panelPlate (juce::Graphics& g, juce::Rectangle<int> r, float corner)
-    {
-        const auto f = r.toFloat();
-        g.setGradientFill (juce::ColourGradient (Palette::graphiteMid, f.getX(), f.getY(), Palette::graphite, f.getX(), f.getBottom(), false));
-        g.fillRoundedRectangle (f, corner);
-        g.setColour (Palette::silver.withAlpha (0.55f));
-        g.drawRoundedRectangle (f.reduced (1.0f), corner, 1.5f);
+        b.setColour (juce::ComboBox::outlineColourId, Palette::cream);
     }
 }
 
@@ -150,21 +171,22 @@ void TunerView::paint (juce::Graphics& g)
     const auto b = getLocalBounds().toFloat();
     const bool inTune = haveNote && std::abs (displayCents) <= 5.0f;
     const auto noteColour = ! haveNote ? Palette::dim : inTune ? Palette::green : Palette::amber;
+    const int top = juce::jmax (0, (getHeight() - 340) / 2);
 
     const juce::String noteText = haveNote ? juce::String (names[((note % 12) + 12) % 12]) + juce::String (note / 12 - 1) : "--";
     g.setColour (noteColour);
     g.setFont (juce::FontOptions (96.0f, juce::Font::bold));
-    g.drawText (noteText, b.withTrimmedTop (20.0f).withHeight (110.0f).toNearestInt(), juce::Justification::centred);
+    g.drawText (noteText, juce::Rectangle<int> (0, top + 10, getWidth(), 110), juce::Justification::centred);
 
     g.setColour (Palette::dim);
     g.setFont (juce::FontOptions (15.0f));
-    g.drawText (haveNote ? juce::String (hz, 1) + " Hz" : "Play a string", juce::Rectangle<int> (0, 132, getWidth(), 22),
+    g.drawText (haveNote ? juce::String (hz, 1) + " Hz" : "Play a string", juce::Rectangle<int> (0, top + 126, getWidth(), 22),
                 juce::Justification::centred);
 
     // meter: -50..+50 cents
-    const float halfWidth = std::min (300.0f, b.getWidth() * 0.5f - 30.0f);
-    const float cx = b.getCentreX(), meterY = 180.0f;
-    g.setColour (Palette::inkDark);
+    const float halfWidth = std::min (320.0f, b.getWidth() * 0.5f - 30.0f);
+    const float cx = b.getCentreX(), meterY = (float) top + 172.0f;
+    g.setColour (juce::Colour (0xff1e1e21));
     g.fillRoundedRectangle (cx - halfWidth, meterY, halfWidth * 2.0f, 18.0f, 4.0f);
 
     g.setColour (Palette::green.withAlpha (0.35f));
@@ -195,18 +217,18 @@ void TunerView::paint (juce::Graphics& g)
     {
         const int c = (int) std::lround (displayCents);
         g.drawText ((c > 0 ? "+" + juce::String (c) : juce::String (c)) + " cents",
-                    juce::Rectangle<int> (0, 232, getWidth(), 56), juce::Justification::centred);
+                    juce::Rectangle<int> (0, top + 226, getWidth(), 56), juce::Justification::centred);
 
         g.setColour (noteColour);
         g.setFont (juce::FontOptions (17.0f, juce::Font::bold));
         g.drawText (inTune ? "IN TUNE" : displayCents < 0.0f ? "FLAT - tune up" : "SHARP - tune down",
-                    juce::Rectangle<int> (0, 290, getWidth(), 24), juce::Justification::centred);
+                    juce::Rectangle<int> (0, top + 284, getWidth(), 24), juce::Justification::centred);
     }
 
     g.setColour (Palette::dim);
     g.setFont (juce::FontOptions (13.0f));
-    g.drawText ("Output is muted while the tuner is open", juce::Rectangle<int> (0, getHeight() - 28, getWidth(), 20),
-                juce::Justification::centred);
+    g.drawText ("Output is muted while the tuner is open. Click the tuning fork again, or any tab, to go back",
+                juce::Rectangle<int> (0, top + 318, getWidth(), 20), juce::Justification::centred);
 }
 
 // ---------------------------------------------------------------- amp view
@@ -222,16 +244,10 @@ AmpView::AmpView (GuitarDriveProcessor& p, const juce::Image& logoImage)
         auto& strip = strips[(size_t) s];
 
         for (size_t k = 0; k < defs.size(); ++k)
-            strip.knobs[k].init (*this, apvts, GuitarDriveProcessor::paramId (s, defs[k].id), defs[k].label, theme);
+            strip.knobs[k].init (*this, apvts, GuitarDriveProcessor::paramId (s, defs[k].id), defs[k].label, theme, true);
 
         // transpose moves in whole semitones: one wheel notch is one semitone
         strip.knobs[1].slider.setWheelFractions (1.0 / 24.0, 1.0 / 24.0);
-
-        strip.name.setText (s == 0 ? "LEFT" : "RIGHT", juce::dontSendNotification);
-        strip.name.setJustificationType (juce::Justification::centred);
-        strip.name.setFont (juce::FontOptions (15.0f, juce::Font::bold));
-        strip.name.setColour (juce::Label::textColourId, Palette::cream);
-        addAndMakeVisible (strip.name);
 
         styleAmpButton (strip.revType);
         addAndMakeVisible (strip.revType);
@@ -265,46 +281,53 @@ void AmpView::updateVisibility()
 {
     for (int s = 0; s < 2; ++s)
     {
-        auto& strip = strips[(size_t) s];
         const bool shown = s == 0 || stereo;
-
-        for (auto& k : strip.knobs)
+        for (auto& k : strips[(size_t) s].knobs)
             k.show (shown);
-
-        strip.name.setVisible (shown && stereo);
-        strip.revType.setVisible (shown);
+        strips[(size_t) s].revType.setVisible (shown);
     }
 }
 
-void AmpView::layoutAmp (int index, juce::Rectangle<int> cabinetArea, bool stereoRow)
+void AmpView::layoutAmp (int index, juce::Rectangle<int> area)
 {
+    auto& l = lay[(size_t) index];
     auto& strip = strips[(size_t) index];
-    const auto i = (size_t) index;
 
-    cabinet[i] = cabinetArea;
-    auto inner = cabinetArea.reduced (24, stereoRow ? 14 : 20);
-    if (stereoRow)
+    l.cabinet = area.withTrimmedTop (30);   // the handle sits in the strip above
+    l.panel = { l.cabinet.getX() + 22, l.cabinet.getY() + 18, l.cabinet.getWidth() - 44, 150 };
+    const int grilleTop = l.panel.getBottom() + 16;
+    const int grilleHeight = l.cabinet.getBottom() - 14 - grilleTop;
+    l.grille = grilleHeight >= 30 ? juce::Rectangle<int> (l.cabinet.getX() + 38, grilleTop, l.cabinet.getWidth() - 76, grilleHeight)
+                                  : juce::Rectangle<int>();
+
+    constexpr int col = 98, space = 6;
+    auto row = l.panel.reduced (8, 8);
+    l.groups.clear();
+
+    const auto take = [&] (const juce::String& title, int width)
     {
-        plate[i] = inner;
-        grille[i] = {};
-    }
-    else
+        auto r = row.removeFromLeft (width);
+        row.removeFromLeft (space);
+        l.groups.push_back ({ title, r });
+        return r;
+    };
+    const auto placeKnobs = [&] (juce::Rectangle<int> group, int first, int count)
     {
-        plate[i] = inner.removeFromTop (190);
-        inner.removeFromTop (14);
-        grille[i] = inner;
-    }
+        group.removeFromTop (14);
+        for (int k = 0; k < count; ++k)
+            strip.knobs[(size_t) (first + k)].place (group.removeFromLeft (col), 16);
+        return group;   // whatever is left of the group
+    };
 
-    auto content = plate[i].reduced (12, 10);
-    auto left = content.removeFromLeft (74);
-    strip.name.setBounds (left.removeFromBottom (26));
+    l.jack = take (stereo ? (index == 0 ? "LEFT" : "RIGHT") : "INPUT", 84);
+    placeKnobs (take ("PREAMP", 4 * col), 0, 4);
+    placeKnobs (take ("TONE", 3 * col), 4, 3);
+    const auto beside = placeKnobs (take ("REVERB", col + 88), 7, 1);
+    strip.revType.setBounds (beside.withSizeKeepingCentre (76, 28));
+    placeKnobs (take ("MASTER", col), 8, 1);
 
-    auto right = content.removeFromRight (108).reduced (6, 0);
-    strip.revType.setBounds (right.withSizeKeepingCentre (right.getWidth(), 32));
-
-    const int colWidth = content.getWidth() / numKnobs;
-    for (auto& k : strip.knobs)
-        k.place (content.removeFromLeft (colWidth));
+    l.badge = row;   // the rest: logo and pilot light
+    l.groups.push_back ({ {}, row });
 }
 
 void AmpView::resized()
@@ -312,13 +335,13 @@ void AmpView::resized()
     auto area = getLocalBounds();
     if (stereo)
     {
-        const int rowHeight = area.getHeight() / 2;
-        layoutAmp (0, area.removeFromTop (rowHeight), true);
-        layoutAmp (1, area, true);
+        const int half = area.getHeight() / 2;
+        layoutAmp (0, area.removeFromTop (half));
+        layoutAmp (1, area);
     }
     else
     {
-        layoutAmp (0, area, false);
+        layoutAmp (0, area);
     }
 }
 
@@ -333,98 +356,117 @@ void AmpView::paint (juce::Graphics& g)
 
 void AmpView::paintAmp (juce::Graphics& g, int index)
 {
-    const auto i = (size_t) index;
-    const auto cab = cabinet[i].toFloat();
+    const auto& l = lay[(size_t) index];
+    const auto cab = l.cabinet.toFloat();
+    const float cx = cab.getCentreX();
 
-    // tweed covering with a dark edge and a cream piping line
+    // carry handle: chrome end caps and a black strap arching above the cabinet
+    for (float side : { -1.0f, 1.0f })
+    {
+        const auto cap = juce::Rectangle<float> (90.0f, 13.0f).withCentre ({ cx + side * 235.0f, cab.getY() - 4.0f });
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff1f2f4), cap.getX(), cap.getY(), juce::Colour (0xff8d9198), cap.getX(), cap.getBottom(), false));
+        g.fillRoundedRectangle (cap, 3.0f);
+        drawScrew (g, { cap.getCentreX() + side * 18.0f, cap.getCentreY() }, 2.6f);
+    }
+    juce::Path strap;
+    strap.startNewSubPath (cx - 200.0f, cab.getY() - 5.0f);
+    strap.quadraticTo (cx, cab.getY() - 46.0f, cx + 200.0f, cab.getY() - 5.0f);
+    g.setColour (juce::Colour (0xff232325));
+    g.strokePath (strap, juce::PathStrokeType (14.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (juce::Colours::white.withAlpha (0.13f));
+    g.strokePath (strap, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded),
+                  juce::AffineTransform::translation (0.0f, -3.0f));
+
+    // tweed cabinet, edge to edge
     {
         juce::Graphics::ScopedSaveState save (g);
         juce::Path clip;
-        clip.addRoundedRectangle (cab, 16.0f);
+        clip.addRoundedRectangle (cab.getX(), cab.getY(), cab.getWidth(), cab.getHeight(), 12.0f, 12.0f, true, true, false, false);
         g.reduceClipRegion (clip);
+        g.setOpacity (1.0f);   // images are drawn with the current opacity
         g.drawImageAt (tweedImage, 0, 0);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.18f), 0.0f, cab.getY(),
+                                                 juce::Colours::transparentWhite, 0.0f, cab.getY() + 14.0f, false));
+        g.fillRect (cab.withHeight (14.0f));
     }
-    g.setColour (juce::Colour (0xff2a170a));
-    g.drawRoundedRectangle (cab.reduced (1.0f), 16.0f, 3.0f);
-    g.setColour (Palette::cream.withAlpha (0.5f));
-    g.drawRoundedRectangle (cab.reduced (8.0f), 12.0f, 1.2f);
 
-    // black control plate with a chrome edge
-    const auto pl = plate[i].toFloat();
-    g.setColour (juce::Colours::black.withAlpha (0.5f));
-    g.fillRoundedRectangle (pl.translated (0.0f, 3.0f), 8.0f);
+    // control panel: black plate with a chrome edge, divided into sections
+    const auto pl = l.panel.toFloat();
+    g.setColour (juce::Colours::black.withAlpha (0.45f));
+    g.fillRoundedRectangle (pl.translated (0.0f, 3.0f), 6.0f);
     g.setGradientFill (juce::ColourGradient (Palette::plateLight, pl.getX(), pl.getY(), Palette::plate, pl.getX(), pl.getBottom(), false));
-    g.fillRoundedRectangle (pl, 8.0f);
-    g.setColour (juce::Colour (0xff9a9ca1));
-    g.drawRoundedRectangle (pl.reduced (1.0f), 8.0f, 1.8f);
+    g.fillRoundedRectangle (pl, 6.0f);
+    g.setColour (juce::Colour (0xffb9bcc2));
+    g.drawRoundedRectangle (pl.reduced (1.0f), 6.0f, 2.0f);
 
-    drawScrew (g, { pl.getX() + 14.0f, pl.getY() + 14.0f }, 4.5f);
-    drawScrew (g, { pl.getRight() - 14.0f, pl.getY() + 14.0f }, 4.5f);
-    drawScrew (g, { pl.getX() + 14.0f, pl.getBottom() - 14.0f }, 4.5f);
-    drawScrew (g, { pl.getRight() - 14.0f, pl.getBottom() - 14.0f }, 4.5f);
+    const juce::Font titleFont (juce::FontOptions (10.0f, juce::Font::bold));
+    for (const auto& group : l.groups)
+    {
+        const auto r = group.area.toFloat();
+        g.setColour (Palette::cream.withAlpha (0.5f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, 1.0f);
+
+        if (group.title.isNotEmpty())   // the title sits on the top line, which is broken behind it
+        {
+            const float w = juce::GlyphArrangement::getStringWidth (titleFont, group.title) + 14.0f;
+            const auto tag = juce::Rectangle<float> (w, 12.0f).withCentre ({ r.getCentreX(), r.getY() + 1.0f });
+            g.setColour (Palette::plateLight);
+            g.fillRect (tag);
+            g.setColour (Palette::cream);
+            g.setFont (titleFont);
+            g.drawText (group.title, tag.translated (0.0f, 1.0f).toNearestInt(), juce::Justification::centred);
+        }
+    }
 
     // input jack
-    const juce::Point<float> jack (pl.getX() + 49.0f, pl.getY() + 54.0f);
-    g.setColour (Palette::cream);
-    g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-    g.drawText ("INPUT", juce::Rectangle<float> (jack.x - 30.0f, jack.y - 34.0f, 60.0f, 14.0f).toNearestInt(), juce::Justification::centred);
-    g.setColour (juce::Colours::black.withAlpha (0.5f));
-    g.fillEllipse (jack.x - 15.0f, jack.y - 13.0f, 30.0f, 30.0f);
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff2f3f5), jack.x - 6.0f, jack.y - 8.0f,
-                                             juce::Colour (0xff6d7077), jack.x + 8.0f, jack.y + 10.0f, true));
-    g.fillEllipse (jack.x - 15.0f, jack.y - 15.0f, 30.0f, 30.0f);
-    g.setColour (juce::Colour (0xff0a0a0b));
+    const auto jack = l.jack.toFloat().getCentre().translated (0.0f, 4.0f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff2f3f5), jack.x - 7.0f, jack.y - 9.0f,
+                                             juce::Colour (0xff6d7077), jack.x + 9.0f, jack.y + 11.0f, true));
+    g.fillEllipse (jack.x - 19.0f, jack.y - 19.0f, 38.0f, 38.0f);
+    juce::Path nut;
+    nut.addPolygon (jack, 6, 14.0f, 0.3f);
+    g.setColour (juce::Colour (0xff8c9097));
+    g.fillPath (nut);
+    g.setColour (juce::Colour (0xff09090a));
     g.fillEllipse (jack.x - 8.0f, jack.y - 8.0f, 16.0f, 16.0f);
-    g.setColour (juce::Colours::white.withAlpha (0.35f));
-    g.drawEllipse (jack.x - 8.0f, jack.y - 8.0f, 16.0f, 16.0f, 1.0f);
 
-    // red pilot lamp
-    const juce::Point<float> lamp (pl.getX() + 49.0f, pl.getY() + 120.0f);
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xffff3b2a).withAlpha (0.5f), lamp.x, lamp.y,
-                                             juce::Colours::transparentBlack, lamp.x + 30.0f, lamp.y, true));
-    g.fillEllipse (lamp.x - 30.0f, lamp.y - 30.0f, 60.0f, 60.0f);
-    g.setColour (juce::Colour (0xff9a9ca1));
-    g.fillEllipse (lamp.x - 15.0f, lamp.y - 15.0f, 30.0f, 30.0f);
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xffff8a70), lamp.x - 4.0f, lamp.y - 5.0f,
-                                             juce::Colour (0xffb01408), lamp.x + 6.0f, lamp.y + 7.0f, true));
-    g.fillEllipse (lamp.x - 11.0f, lamp.y - 11.0f, 22.0f, 22.0f);
-    g.setColour (juce::Colours::white.withAlpha (0.6f));
-    g.fillEllipse (lamp.x - 6.0f, lamp.y - 7.0f, 7.0f, 4.5f);
-    g.setColour (Palette::cream);
-    g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-    g.drawText ("PILOT", juce::Rectangle<float> (lamp.x - 30.0f, lamp.y + 18.0f, 60.0f, 14.0f).toNearestInt(), juce::Justification::centred);
-
-    // speaker grille cloth with the logo (mono layout only)
-    if (! grille[i].isEmpty())
+    // logo, and the pilot jewel beside it
+    const auto badge = l.badge.toFloat();
+    if (logo.isValid())
     {
-        const auto gr = grille[i].toFloat();
-        if (grilleImage.isNull() || grilleImage.getWidth() != grille[i].getWidth() || grilleImage.getHeight() != grille[i].getHeight())
-            grilleImage = Textures::grille (grille[i].getWidth(), grille[i].getHeight());
+        g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+        g.setOpacity (1.0f);
+        g.drawImage (logo, badge.withTrimmedRight (58.0f).reduced (8.0f, 8.0f), juce::RectanglePlacement::centred);
+    }
+    const juce::Point<float> lamp (badge.getRight() - 32.0f, badge.getCentreY());
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xffff4a36).withAlpha (0.55f), lamp.x, lamp.y,
+                                             juce::Colours::transparentBlack, lamp.x + 34.0f, lamp.y, true));
+    g.fillEllipse (lamp.x - 34.0f, lamp.y - 34.0f, 68.0f, 68.0f);
+    g.setColour (juce::Colour (0xffb9bcc2));
+    g.fillEllipse (lamp.x - 16.0f, lamp.y - 16.0f, 32.0f, 32.0f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xffffa58e), lamp.x - 4.0f, lamp.y - 5.0f,
+                                             juce::Colour (0xffb01408), lamp.x + 7.0f, lamp.y + 8.0f, true));
+    g.fillEllipse (lamp.x - 12.0f, lamp.y - 12.0f, 24.0f, 24.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.65f));
+    g.fillEllipse (lamp.x - 7.0f, lamp.y - 8.0f, 8.0f, 5.0f);
+
+    // grille cloth
+    if (! l.grille.isEmpty())
+    {
+        const auto gr = l.grille.toFloat();
+        if (grilleImage.isNull() || grilleImage.getWidth() != l.grille.getWidth() || grilleImage.getHeight() != l.grille.getHeight())
+            grilleImage = Textures::grille (l.grille.getWidth(), l.grille.getHeight());
 
         {
             juce::Graphics::ScopedSaveState save (g);
             juce::Path clip;
-            clip.addRoundedRectangle (gr, 6.0f);
+            clip.addRoundedRectangle (gr, 26.0f);
             g.reduceClipRegion (clip);
-            g.drawImageAt (grilleImage, grille[i].getX(), grille[i].getY());
+            g.setOpacity (1.0f);
+            g.drawImageAt (grilleImage, l.grille.getX(), l.grille.getY());
         }
-        g.setColour (juce::Colour (0xff3b2412));
-        g.drawRoundedRectangle (gr, 6.0f, 4.0f);
-        g.setColour (juce::Colour (0xff9a9ca1).withAlpha (0.7f));
-        g.drawRoundedRectangle (gr.reduced (4.0f), 4.0f, 1.0f);
-
-        const auto badge = juce::Rectangle<float> (250.0f, juce::jmin (86.0f, gr.getHeight() - 12.0f)).withCentre (gr.getCentre());
-        g.setColour (juce::Colours::black.withAlpha (0.45f));
-        g.fillRoundedRectangle (badge.translated (0.0f, 2.0f), 8.0f);
-        g.setColour (Palette::plate);
-        g.fillRoundedRectangle (badge, 8.0f);
-        g.setColour (juce::Colour (0xff9a9ca1));
-        g.drawRoundedRectangle (badge.reduced (1.0f), 8.0f, 1.5f);
-        if (logo.isValid())
-        {
-            g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
-            g.drawImage (logo, badge.reduced (10.0f, 4.0f), juce::RectanglePlacement::centred);
-        }
+        g.setColour (juce::Colour (0xff3b2412).withAlpha (0.85f));
+        g.drawRoundedRectangle (gr, 26.0f, 3.0f);
     }
 }
 
@@ -456,7 +498,8 @@ PedalPanel::PedalPanel (juce::AudioProcessorValueTreeState& apvts, const Params:
     onAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, GuitarDriveProcessor::paramId (strip, def.onId), footSwitch);
     addAndMakeVisible (footSwitch);
 
-    const auto theme = Themes::pedal (colours.knob);
+    auto theme = Themes::pedal (colours.knob);
+    theme.label = theme.scale = colours.knob.darker (0.65f).withMultipliedSaturation (1.6f);   // printed in the pedal's color
     for (const auto& k : def.knobs)
     {
         knobs.push_back (std::make_unique<KnobUI>());
@@ -469,24 +512,29 @@ void PedalPanel::paint (juce::Graphics& g)
     if (brushed.isNull() || brushed.getWidth() != getWidth() || brushed.getHeight() != getHeight())
         brushed = Textures::brushedAluminum (getWidth(), getHeight(), (int) (std::hash<std::string> {} (def.title) & 0xffff));
 
-    drawEnclosure (g, getLocalBounds().toFloat().reduced (4.0f), brushed);
+    drawEnclosure (g, getLocalBounds().toFloat(), brushed, colours.knob.darker (0.25f));
 
-    // silkscreened name with a stripe in the pedal's color
-    g.setColour (Palette::inkDark);
-    g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
-    g.drawText (def.title, titleArea, juce::Justification::centred);
-    g.setColour (colours.led);
-    g.fillRoundedRectangle ((float) titleArea.getCentreX() - 23.0f, (float) titleArea.getBottom() - 1.0f, 46.0f, 4.0f, 2.0f);
+    // the pedal's name in script, in its own color
+    g.setColour (colours.knob.darker (0.65f).withMultipliedSaturation (1.6f));
+    g.setFont (scriptFont ((float) titleArea.getHeight() * 0.95f));
+    g.drawText (titleCase (def.title), titleArea, juce::Justification::centred);
+
+    if (! creditArea.isEmpty())
+    {
+        g.setColour (Palette::inkDark.withAlpha (0.7f));
+        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.drawText ("DESIGNED BY JOE GARCIA", creditArea, juce::Justification::centred);
+    }
 }
 
 void PedalPanel::resized()
 {
-    auto area = getLocalBounds().reduced (16, 14);
-    titleArea = area.removeFromTop (28);
+    auto area = pedalFace (getLocalBounds().toFloat()).toNearestInt().reduced (10, 8);
+    const bool roomy = area.getHeight() >= 300;
 
-    const int footSwitchHeight = juce::jlimit (96, 140, area.getHeight() / 3);
-    footSwitch.setBounds (area.removeFromBottom (footSwitchHeight).withSizeKeepingCentre (juce::jmin (140, area.getWidth()), footSwitchHeight));
-    area.removeFromTop (4);
+    creditArea = roomy ? area.removeFromBottom (14) : juce::Rectangle<int>();
+    footSwitch.setBounds (area.removeFromBottom (roomy ? 76 : 58));
+    titleArea = area.removeFromBottom (roomy ? 46 : 32);
 
     const int n = (int) knobs.size();
     const int cols = n <= 2 ? 1 : 2;
@@ -498,7 +546,7 @@ void PedalPanel::resized()
         const int row = k / cols, col = k % cols;
         const int inRow = juce::jmin (cols, n - row * cols);   // a short last row is centred
         const int x0 = area.getX() + (cols - inRow) * cellW / 2 + col * cellW;
-        knobs[(size_t) k]->place ({ x0, area.getY() + row * cellH, cellW, cellH }, 16);
+        knobs[(size_t) k]->place ({ x0, area.getY() + row * cellH, cellW, cellH }, 15);
     }
 }
 
@@ -513,12 +561,13 @@ PedalBoard::PedalBoard (juce::AudioProcessorValueTreeState& apvts, const std::ve
 
 void PedalBoard::resized()
 {
-    constexpr int space = 14;
+    constexpr int space = 22;
     int total = space * ((int) panels.size() - 1);
     for (auto& p : panels)
         total += p->preferredWidth();
 
-    auto row = getLocalBounds().reduced (0, 8).withSizeKeepingCentre (total, getHeight() - 16);
+    const int height = juce::jmin (410, getHeight() - 16);
+    auto row = getLocalBounds().withSizeKeepingCentre (total, height);
     for (auto& p : panels)
     {
         p->setBounds (row.removeFromLeft (p->preferredWidth()));
@@ -625,11 +674,11 @@ WahPedal::WahPedal (juce::AudioProcessorValueTreeState& apvts, int strip)
 
 void WahPedal::resized()
 {
-    auto area = getLocalBounds().reduced (18, 14);
-    titleArea = area.removeFromTop (28);
-    const int footSwitchHeight = juce::jlimit (96, 140, area.getHeight() / 3);
-    footSwitch.setBounds (area.removeFromBottom (footSwitchHeight).withSizeKeepingCentre (juce::jmin (140, area.getWidth()), footSwitchHeight));
-    treadle.setBounds (area.reduced (6, 4));
+    auto area = pedalFace (getLocalBounds().toFloat()).toNearestInt().reduced (10, 8);
+    const bool roomy = area.getHeight() >= 300;
+    footSwitch.setBounds (area.removeFromBottom (roomy ? 76 : 58));
+    titleArea = area.removeFromBottom (roomy ? 46 : 32);
+    treadle.setBounds (area.reduced (4, 2));
 }
 
 void WahPedal::paint (juce::Graphics& g)
@@ -637,12 +686,11 @@ void WahPedal::paint (juce::Graphics& g)
     if (brushed.isNull() || brushed.getWidth() != getWidth() || brushed.getHeight() != getHeight())
         brushed = Textures::brushedAluminum (getWidth(), getHeight(), 4242);
 
-    drawEnclosure (g, getLocalBounds().toFloat().reduced (4.0f), brushed);
-    g.setColour (Palette::inkDark);
-    g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
-    g.drawText ("WAH", titleArea, juce::Justification::centred);
-    g.setColour (juce::Colour (0xffb56bff));
-    g.fillRoundedRectangle ((float) titleArea.getCentreX() - 23.0f, (float) titleArea.getBottom() - 1.0f, 46.0f, 4.0f, 2.0f);
+    const juce::Colour purple (0xffd5c3e6);
+    drawEnclosure (g, getLocalBounds().toFloat(), brushed, purple.darker (0.25f));
+    g.setColour (purple.darker (0.65f).withMultipliedSaturation (1.6f));
+    g.setFont (scriptFont ((float) titleArea.getHeight() * 0.95f));
+    g.drawText ("Wah", titleArea, juce::Justification::centred);
 }
 
 WahView::WahView (juce::AudioProcessorValueTreeState& apvts, int strip)
@@ -654,9 +702,9 @@ WahView::WahView (juce::AudioProcessorValueTreeState& apvts, int strip)
 
 void WahView::resized()
 {
-    constexpr int wahWidth = 300, space = 24;
+    constexpr int wahWidth = 300, space = 26;
     const int total = wahWidth + space + autoWah.preferredWidth();
-    auto row = getLocalBounds().reduced (0, 8).withSizeKeepingCentre (total, getHeight() - 16);
+    auto row = getLocalBounds().withSizeKeepingCentre (total, juce::jmin (410, getHeight() - 16));
     wah.setBounds (row.removeFromLeft (wahWidth));
     row.removeFromLeft (space);
     autoWah.setBounds (row);
@@ -669,7 +717,7 @@ EqView::EqView (juce::AudioProcessorValueTreeState& apvts, int strip)
     onAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, GuitarDriveProcessor::paramId (strip, Params::eqOn), footSwitch);
     addAndMakeVisible (footSwitch);
 
-    const juce::Colour cap (0xffbcd8ec);   // creamy blue fader caps
+    const juce::Colour cap (0xfff4f5f7);   // bright white fader caps on a black rack unit
     for (int b = 0; b < Params::numEqBands; ++b)
     {
         auto& band = bands[(size_t) b];
@@ -677,14 +725,15 @@ EqView::EqView (juce::AudioProcessorValueTreeState& apvts, int strip)
         band.fader.setDoubleClickReturnValue (true, 0.0);
         band.fader.onValueChange = [this] { updateCurve(); };
         band.fader.setColour (juce::Slider::thumbColourId, cap);
-        band.fader.setColour (juce::Slider::backgroundColourId, Palette::inkDark);
-        band.fader.setColour (juce::Slider::textBoxTextColourId, Palette::inkDark);
+        band.fader.setColour (juce::Slider::backgroundColourId, Palette::dim);
+        band.fader.setColour (juce::Slider::textBoxTextColourId, Palette::text);
+        band.fader.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         addAndMakeVisible (band.fader);
 
         band.label.setText (juce::String (Params::eqLabel (b)) + " Hz", juce::dontSendNotification);
         band.label.setJustificationType (juce::Justification::centred);
-        band.label.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        band.label.setColour (juce::Label::textColourId, Palette::inkDark);
+        band.label.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        band.label.setColour (juce::Label::textColourId, Palette::text);
         addAndMakeVisible (band.label);
     }
     updateCurve();
@@ -700,21 +749,22 @@ void EqView::updateCurve()
 
 void EqView::resized()
 {
-    auto area = getLocalBounds().reduced (22, 16);
-    footSwitch.setBounds (area.removeFromRight (88).removeFromTop (118));
-    area.removeFromRight (10);
+    const auto pedal = getLocalBounds().withSizeKeepingCentre (juce::jmin (1080, getWidth() - 40), juce::jmin (410, getHeight() - 16));
+    auto area = pedalFace (pedal.toFloat()).toNearestInt().reduced (18, 10);
 
-    titleArea = area.removeFromTop (24);
-    area.removeFromTop (4);
-    curveArea = area.removeFromTop (juce::jmin (110, area.getHeight() / 3));
-    area.removeFromTop (6);
+    auto top = area.removeFromTop (juce::jmin (110, area.getHeight() / 3));
+    auto side = top.removeFromRight (170);
+    titleArea = side.removeFromTop (side.getHeight() / 2);
+    footSwitch.setBounds (side);
+    top.removeFromRight (10);
+    curveArea = top;
+    area.removeFromTop (8);
 
-    auto faders = getLocalBounds().reduced (22, 16).withTop (area.getY());
-    const int colWidth = faders.getWidth() / Params::numEqBands;
+    const int colWidth = area.getWidth() / Params::numEqBands;
     for (auto& band : bands)
     {
-        auto col = faders.removeFromLeft (colWidth);
-        band.label.setBounds (col.removeFromTop (20));
+        auto col = area.removeFromLeft (colWidth);
+        band.label.setBounds (col.removeFromTop (18));
         band.fader.setBounds (col.reduced (6, 0));
     }
     updateCurve();
@@ -725,19 +775,27 @@ void EqView::paint (juce::Graphics& g)
     if (brushed.isNull() || brushed.getWidth() != getWidth() || brushed.getHeight() != getHeight())
         brushed = Textures::brushedAluminum (getWidth(), getHeight(), 99);
 
-    drawEnclosure (g, getLocalBounds().toFloat().reduced (6.0f), brushed, 3.8f);
+    const auto pedal = getLocalBounds().withSizeKeepingCentre (juce::jmin (1080, getWidth() - 40), juce::jmin (410, getHeight() - 16));
+    // a black rack unit: dark body, darker face with a thin blue line around it
+    const juce::Colour blue (0xffbcd8ec);
+    const auto body = pedal.toFloat();
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff3a3a3d), body.getX(), body.getY(), juce::Colour (0xff1c1c1e), body.getX(), body.getBottom(), false));
+    g.fillRoundedRectangle (body, 14.0f);
+    const auto face = pedalFace (body);
+    g.setColour (juce::Colour (0xff161618));
+    g.fillRoundedRectangle (face, 10.0f);
+    g.setColour (juce::Colour (0xff42a9ff).withAlpha (0.7f));
+    g.drawRoundedRectangle (face.reduced (2.0f), 9.0f, 1.2f);
 
-    g.setColour (Palette::inkDark);
-    g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
-    g.drawText ("GRAPHIC EQUALIZER", titleArea, juce::Justification::centredLeft);
-    g.setColour (juce::Colour (0xff42a9ff));
-    g.fillRoundedRectangle ((float) titleArea.getX(), (float) titleArea.getBottom() - 1.0f, 46.0f, 4.0f, 2.0f);
+    g.setColour (blue);
+    g.setFont (scriptFont (juce::jmin (40.0f, (float) titleArea.getHeight() * 0.9f)));
+    g.drawText ("Equalizer", titleArea, juce::Justification::centred);
 
     // response display
     const auto r = curveArea.toFloat();
     g.setColour (juce::Colour (0xff0d0e10));
     g.fillRoundedRectangle (r, 6.0f);
-    g.setColour (Palette::silver.withAlpha (0.4f));
+    g.setColour (juce::Colour (0xff35383d));
     g.drawRoundedRectangle (r, 6.0f, 1.2f);
 
     const float centreY = r.getCentreY(), halfH = r.getHeight() * 0.40f;
@@ -770,7 +828,7 @@ void EqView::paint (juce::Graphics& g)
     g.strokePath (path, juce::PathStrokeType (2.2f));
 }
 
-// ---------------------------------------------------------------- footer: tuner button and metronome
+// ---------------------------------------------------------------- footer: tuner and metronome
 
 FooterBar::FooterBar (GuitarDriveProcessor& p)
     : proc (p),
@@ -786,19 +844,22 @@ FooterBar::FooterBar (GuitarDriveProcessor& p)
     playAttach = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, Params::metroOn, playButton);
     addAndMakeVisible (playButton);
 
-    const auto caption = [this] (juce::Label& l, const juce::String& text, juce::Justification j = juce::Justification::centred)
-    {
-        l.setText (text, juce::dontSendNotification);
-        l.setJustificationType (j);
-        l.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        l.setColour (juce::Label::textColourId, Palette::dim);
-        addAndMakeVisible (l);
-    };
-    caption (tempoLabel, "TEMPO (BPM)");
-    caption (sigLabel, "TIME SIGNATURE");
-    caption (slashLabel, "/");
-    slashLabel.setFont (juce::FontOptions (24.0f, juce::Font::bold));
+    slashLabel.setText ("/", juce::dontSendNotification);
+    slashLabel.setJustificationType (juce::Justification::centred);
+    slashLabel.setFont (juce::FontOptions (22.0f, juce::Font::bold));
     slashLabel.setColour (juce::Label::textColourId, Palette::text);
+    addAndMakeVisible (slashLabel);
+
+    clickLabel.setText ("CLICK", juce::dontSendNotification);
+    clickLabel.setJustificationType (juce::Justification::centredRight);
+    clickLabel.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    clickLabel.setColour (juce::Label::textColourId, Palette::text);
+    addAndMakeVisible (clickLabel);
+
+    clickKnob.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    clickKnob.setLook (KnobStyle::ring, juce::Colours::white, Palette::silver);
+    clickAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (p.apvts, Params::metroVol, clickKnob);
+    addAndMakeVisible (clickKnob);
 
     bpmBox.onUserValue = [this] (int v) { bpmAttach.setValueAsCompleteGesture ((float) v); };
     beatsBox.onUserValue = [this] (int v) { beatsAttach.setValueAsCompleteGesture ((float) v); };
@@ -808,14 +869,18 @@ FooterBar::FooterBar (GuitarDriveProcessor& p)
         noteAttach.setValueAsCompleteGesture ((float) index);
         noteBox.showNumber (Metronome::noteValue (index));
     };
-    addAndMakeVisible (bpmBox);
-    addAndMakeVisible (beatsBox);
-    addAndMakeVisible (noteBox);
+    for (auto* box : { &bpmBox, &beatsBox, &noteBox })
+    {
+        box->setColour (juce::TextEditor::backgroundColourId, juce::Colours::black);
+        box->setColour (juce::TextEditor::outlineColourId, juce::Colours::white.withAlpha (0.75f));
+        box->applyFontToAllText (juce::FontOptions (18.0f, juce::Font::bold));
+        addAndMakeVisible (*box);
+    }
 
+    tapButton.setColour (juce::TextButton::buttonColourId, juce::Colours::black);
+    tapButton.setColour (juce::ComboBox::outlineColourId, juce::Colours::white);
     tapButton.onClick = [this] { tap(); };
     addAndMakeVisible (tapButton);
-
-    vol.init (*this, p.apvts, Params::metroVol, "CLICK", Themes::neutral());
 
     bpmAttach.sendInitialUpdate();
     beatsAttach.sendInitialUpdate();
@@ -844,42 +909,34 @@ void FooterBar::tap()
 
 void FooterBar::resized()
 {
-    auto area = getLocalBounds().reduced (18, 10);
+    auto area = getLocalBounds().reduced (22, 8);
+    const auto centred = [&area] (int width, int height) { return area.removeFromLeft (width).withSizeKeepingCentre (width, height); };
 
-    tunerButton.setBounds (area.removeFromLeft (96).withSizeKeepingCentre (96, 40));
-    area.removeFromLeft (26);
-    playButton.setBounds (area.removeFromLeft (56).withSizeKeepingCentre (56, 56));
+    tunerButton.setBounds (centred (44, 44));
+    area.removeFromLeft (14);
+    playButton.setBounds (centred (44, 44));
+    area.removeFromLeft (16);
+    tapButton.setBounds (centred (58, 32));
+    bpmBox.setBounds (centred (72, 32));
     area.removeFromLeft (22);
+    beatsBox.setBounds (centred (48, 32));
+    slashLabel.setBounds (centred (22, 32));
+    noteBox.setBounds (centred (48, 32));
+    area.removeFromLeft (24);
 
-    auto tempo = area.removeFromLeft (110);
-    tempoLabel.setBounds (tempo.removeFromTop (16));
-    bpmBox.setBounds (tempo.withSizeKeepingCentre (96, 38));
-    area.removeFromLeft (8);
-    tapButton.setBounds (area.removeFromLeft (72).withSizeKeepingCentre (72, 38).translated (0, 8));
-    area.removeFromLeft (30);
-
-    auto sig = area.removeFromLeft (150);
-    sigLabel.setBounds (sig.removeFromTop (16));
-    auto row = sig.withSizeKeepingCentre (136, 38);
-    beatsBox.setBounds (row.removeFromLeft (56));
-    slashLabel.setBounds (row.removeFromLeft (24));
-    noteBox.setBounds (row.removeFromLeft (56));
-    area.removeFromLeft (28);
-
-    vol.place (area.removeFromRight (92), 16);
-    area.removeFromRight (16);
+    clickKnob.setBounds (area.removeFromRight (46).withSizeKeepingCentre (46, 46));
+    clickLabel.setBounds (area.removeFromRight (60));
+    area.removeFromRight (12);
     dotsArea = area.withSizeKeepingCentre (area.getWidth(), 24);
 }
 
 void FooterBar::paint (juce::Graphics& g)
 {
-    panelPlate (g, getLocalBounds(), 12.0f);
-
     // one light per pulse of the bar; the strong pulse is amber, the medium ones blue
     const int beats = Metronome::clampBeats ((int) std::lround (proc.apvts.getRawParameterValue (Params::metroBeats)->load()));
     const int note = Metronome::noteValue ((int) std::lround (proc.apvts.getRawParameterValue (Params::metroNote)->load()));
     const int current = proc.getMetronome().getPulse();
-    constexpr float d = 16.0f, space = 6.0f;
+    constexpr float d = 14.0f, space = 7.0f;
     const float y = (float) dotsArea.getCentreY();
 
     for (int i = 0; i < beats; ++i)
@@ -893,13 +950,11 @@ void FooterBar::paint (juce::Graphics& g)
             g.setGradientFill (juce::ColourGradient (lit.withAlpha (0.5f), dot.getCentreX(), dot.getCentreY(),
                                                      lit.withAlpha (0.0f), dot.getCentreX() + d, dot.getCentreY(), true));
             g.fillEllipse (dot.expanded (d * 0.7f));
+            g.setColour (lit);
+            g.fillEllipse (dot);
         }
-        g.setColour (juce::Colour (0xff1c1d20));
-        g.fillEllipse (dot.expanded (2.0f));
-        g.setColour (i == current ? lit : lit.withAlpha (0.2f));
-        g.fillEllipse (dot);
-        g.setColour (accent == 2 ? Palette::silver : Palette::dim.withAlpha (0.6f));
-        g.drawEllipse (dot, accent == 2 ? 1.8f : 1.0f);
+        g.setColour (i == current ? lit : lit.withAlpha (accent == 2 ? 0.9f : 0.45f));
+        g.drawEllipse (dot.reduced (0.75f), 1.5f);
     }
 }
 
@@ -915,10 +970,11 @@ PresetBar::PresetBar (GuitarDriveProcessor& p)
     newButton.onClick = [this] { saveAsNew(); };
     deleteButton.onClick = [this] { askDelete(); };
 
-    nameButton.setColour (juce::TextButton::buttonColourId, Palette::graphite);
-    nameButton.setColour (juce::TextButton::textColourOffId, Palette::amber);
+    nameButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff222225));
+    nameButton.setColour (juce::TextButton::textColourOffId, Palette::text);
+    nameButton.setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
 
-    for (auto* b : { &prevButton, &nextButton, &nameButton, &saveButton, &newButton, &deleteButton })
+    for (juce::Button* b : std::initializer_list<juce::Button*> { &prevButton, &nextButton, &nameButton, &saveButton, &newButton, &deleteButton })
         addAndMakeVisible (*b);
 
     refresh();
@@ -927,23 +983,29 @@ PresetBar::PresetBar (GuitarDriveProcessor& p)
 
 void PresetBar::resized()
 {
-    auto area = getLocalBounds().reduced (6, 4);
-    prevButton.setBounds (area.removeFromLeft (34));
-    area.removeFromLeft (6);
-    deleteButton.setBounds (area.removeFromRight (78));
-    area.removeFromRight (6);
-    newButton.setBounds (area.removeFromRight (56));
-    area.removeFromRight (6);
-    saveButton.setBounds (area.removeFromRight (70));
-    area.removeFromRight (6);
-    nextButton.setBounds (area.removeFromRight (34));
-    area.removeFromRight (6);
-    nameButton.setBounds (area);
+    const int cx = getWidth() / 2;
+    saveButton.setBounds (cx - 56 - 17, 0, 34, 30);
+    newButton.setBounds (cx - 17, 0, 34, 30);
+    deleteButton.setBounds (cx + 56 - 17, 0, 34, 30);
+
+    auto row = juce::Rectangle<int> (0, 42, getWidth(), 36);
+    prevButton.setBounds (row.removeFromLeft (30));
+    nextButton.setBounds (row.removeFromRight (30));
+    nameButton.setBounds (row.reduced (8, 0));
 }
 
 void PresetBar::paint (juce::Graphics& g)
 {
-    panelPlate (g, getLocalBounds(), 10.0f);
+    g.setColour (Palette::text);
+    g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+    g.drawText ("PRESETS", juce::Rectangle<int> (0, 100, getWidth(), 22), juce::Justification::centred);
+
+    // menu arrow at the right end of the name
+    const auto r = nameButton.getBounds().toFloat();
+    juce::Path arrow;
+    arrow.addTriangle (r.getRight() - 24.0f, r.getCentreY() - 3.0f, r.getRight() - 14.0f, r.getCentreY() - 3.0f, r.getRight() - 19.0f, r.getCentreY() + 4.0f);
+    g.setColour (Palette::text);
+    g.fillPath (arrow);
 }
 
 void PresetBar::refresh()
@@ -952,13 +1014,13 @@ void PresetBar::refresh()
     const auto name = presets.currentName();
     const bool dirty = presets.isDirty();
 
-    const juce::String text = name.isEmpty() ? juce::String ("No preset selected") : name + (dirty ? " *" : "");
+    const juce::String text = name.isEmpty() ? juce::String ("No preset") : name + (dirty ? " *" : "");
     if (text != shownText)
     {
         shownText = text;
         nameButton.setButtonText (text);
     }
-    saveButton.setEnabled (name.isEmpty() || dirty);   // with no preset selected, SAVE creates one
+    saveButton.setEnabled (name.isEmpty() || dirty);   // with no preset selected, save creates one
     deleteButton.setEnabled (name.isNotEmpty());
 }
 
@@ -1103,6 +1165,8 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
     : juce::AudioProcessorEditor (&p),
       proc (p),
       logoImage (loadEmbeddedLogo()),
+      inputMeter (p.inputPeak),
+      outputMeter (p.outputPeak),
       ampView (p, logoImage),
       footer (p),
       presetBar (p),
@@ -1113,32 +1177,44 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
       soloAttach (*p.apvts.getParameter (GuitarDriveProcessor::soloId),
                   [this] (float v) { soloState = (int) std::lround (v); updateSoloButtons(); })
 {
+    // a clean geometric sans for the whole interface, when the machine has one
+    for (const char* name : { "Century Gothic", "Bahnschrift" })
+        if (fontInstalled (name))
+        {
+            juce::LookAndFeel::getDefaultLookAndFeel().setDefaultSansSerifTypefaceName (name);
+            break;
+        }
+
     setLookAndFeel (&look);
     setResizable (true, false);
     addAndMakeVisible (root);
     root.painter = [this] (juce::Graphics& g) { paintRoot (g); };
 
-    static const char* const tabNames[5] = { "WAH", "PRE FX", "AMP", "EQ", "POST FX" };
+    const std::pair<Icon, const char*> tabDefs[5] = { { Icon::wah, "WAH" }, { Icon::pedals, "PRE FX" }, { Icon::amp, "AMP" },
+                                                      { Icon::eq, "EQ" }, { Icon::post, "POST FX" } };
     for (size_t i = 0; i < tabs.size(); ++i)
     {
-        auto& t = tabs[i];
-        t.setButtonText (tabNames[i]);
-        t.setClickingTogglesState (true);
-        t.setRadioGroupId (101);
-        t.onClick = [this, i] { setView ((View) i); };
-        root.addAndMakeVisible (t);
+        tabs[i] = std::make_unique<IconButton> (tabDefs[i].first, tabDefs[i].second);
+        tabs[i]->setClickingTogglesState (true);
+        tabs[i]->setRadioGroupId (101);
+        tabs[i]->onClick = [this, i] { setView ((View) i); };
+        root.addAndMakeVisible (*tabs[i]);
     }
-    tabs[(size_t) View::amp].setToggleState (true, juce::dontSendNotification);
+    tabs[(size_t) View::amp]->setToggleState (true, juce::dontSendNotification);
 
-    const auto theme = Themes::neutral();
-    inputKnob.init (root, p.apvts, Params::inputKnob().id, Params::inputKnob().label, theme);
-    outputKnob.init (root, p.apvts, Params::outputKnob().id, Params::outputKnob().label, theme);
+    inputKnob.init (root, p.apvts, Params::inputKnob().id, Params::inputKnob().label);
+    outputKnob.init (root, p.apvts, Params::outputKnob().id, Params::outputKnob().label);
+    root.addAndMakeVisible (inputMeter);
+    root.addAndMakeVisible (outputMeter);
 
-    // pan, solo and mute for both channels sit in the header next to the mono / stereo switch
+    stereoSwitch.onClick = [this] { stereoAttach.setValueAsCompleteGesture (stereoMode ? 0.0f : 1.0f); };
+    root.addAndMakeVisible (stereoSwitch);
+
+    // pan, solo and mute for both channels sit in the top bar while in stereo mode
     for (int ch = 0; ch < 2; ++ch)
     {
         auto& c = channels[(size_t) ch];
-        c.pan.init (root, p.apvts, GuitarDriveProcessor::paramId (ch, GuitarDriveProcessor::panId), "PAN", theme);
+        c.pan.init (root, p.apvts, GuitarDriveProcessor::paramId (ch, GuitarDriveProcessor::panId), "PAN", Themes::ring(), true);
 
         c.name.setText (ch == 0 ? "LEFT" : "RIGHT", juce::dontSendNotification);
         c.name.setJustificationType (juce::Justification::centred);
@@ -1156,9 +1232,6 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
     channels[1].mute.onClick = [this] { setSolo (soloState == 1 ? 0 : 1); };
     channels[1].solo.onClick = [this] { setSolo (soloState == 2 ? 0 : 2); };
     channels[0].mute.onClick = [this] { setSolo (soloState == 2 ? 0 : 2); };
-
-    stereoButton.onClick = [this] { stereoAttach.setValueAsCompleteGesture (stereoMode ? 0.0f : 1.0f); };
-    root.addAndMakeVisible (stereoButton);
 
     // On: the right channel hears input 1 (one guitar through two chains). Off: it hears input 2.
     rightInButton.onClick = [this] { rightInAttach.setValueAsCompleteGesture (rightUsesIn1 ? 0.0f : 1.0f); };
@@ -1196,7 +1269,7 @@ GuitarDriveEditor::~GuitarDriveEditor()
 void GuitarDriveEditor::recomputeDesign()
 {
     bodyH = stereoMode ? 2 * stereoHalfH + gap : monoBodyH;
-    designH = presetBarH + gap + headerH + gap + bodyH + gap + footerH + hintH;
+    designH = topH + bodyH + footerH;
 }
 
 float GuitarDriveEditor::fitScale() const
@@ -1238,7 +1311,7 @@ void GuitarDriveEditor::setStereo (bool on)
     const float oldScale = first ? 0.0f : (float) getWidth() / (float) designW;
 
     stereoMode = on;
-    stereoButton.setToggleState (on, juce::dontSendNotification);
+    stereoSwitch.setToggleState (on, juce::dontSendNotification);
     ampView.setStereo (on);
     recomputeDesign();
     updateVisibility();
@@ -1329,32 +1402,34 @@ juce::Rectangle<int> GuitarDriveEditor::channelRect (int channel) const
 void GuitarDriveEditor::layout()
 {
     const int w = designW;
-    const int hy = presetBarH + gap;   // top of the header row, under the preset bar
-    presetBar.setBounds ((w - 680) / 2, 4, 680, 38);
+    bodyRect = { 0, topH, w, bodyH };
+    footerRect = { 0, bodyRect.getBottom(), w, footerH };
 
-    titleRect = { 20, hy + 8, 150, 88 };
-    headerRect = { 186, hy + 8, 636, 88 };
-    channelPlateRect = { 840, hy + 8, 272, 88 };
-    bodyRect = { 20, hy + headerH + gap, w - 40, bodyH };
-    footerRect = { 20, bodyRect.getBottom() + gap, w - 40, footerH };
-
+    // icon tabs along the top, centred
+    constexpr int tabW = 70, tabH = 52;
+    const int tabsX = (w - tabW * (int) tabs.size()) / 2;
     for (size_t i = 0; i < tabs.size(); ++i)
-        tabs[i].setBounds (196 + (int) i * 90, hy + 34, 84, 36);
-    inputKnob.place ({ 662, hy + 18, 72, 68 }, 14);
-    outputKnob.place ({ 738, hy + 18, 72, 68 }, 14);
+        tabs[i]->setBounds (tabsX + (int) i * tabW, 8, tabW, tabH);
+
+    // control row
+    inputMeter.setBounds (36, 78, 8, 128);
+    inputKnob.place ({ 70, 72, 120, 140 });
+    stereoSwitch.setBounds (250, 86, 130, 58);
+    rightInButton.setBounds (238, 194, 150, 20);
+    presetBar.setBounds ((w - 420) / 2, 70, 420, 130);
 
     for (int ch = 0; ch < 2; ++ch)
     {
         auto& c = channels[(size_t) ch];
-        const int gx = 848 + ch * 130;
-        c.pan.place ({ gx, hy + 18, 60, 68 }, 14);
-        c.name.setBounds (gx + 64, hy + 20, 58, 14);
-        c.solo.setBounds (gx + 64, hy + 36, 58, 22);
-        c.mute.setBounds (gx + 64, hy + 60, 58, 22);
+        const int gx = 925 + ch * 122;
+        c.pan.place ({ gx, 76, 58, 86 }, 14);
+        c.name.setBounds (gx + 60, 80, 56, 14);
+        c.solo.setBounds (gx + 60, 98, 56, 21);
+        c.mute.setBounds (gx + 60, 123, 56, 21);
     }
 
-    stereoButton.setBounds (w - 20 - 100, hy + 35, 100, 34);
-    rightInButton.setBounds (w - 20 - 100 - 8 - 110, hy + 35, 110, 34);
+    outputKnob.place ({ w - 190, 72, 120, 140 });
+    outputMeter.setBounds (w - 44, 78, 8, 128);
 
     ampView.setBounds (bodyRect);
     for (int ch = 0; ch < 2; ++ch)
@@ -1372,65 +1447,31 @@ void GuitarDriveEditor::layout()
 
 void GuitarDriveEditor::paintRoot (juce::Graphics& g)
 {
-    if (frameImage.isNull() || frameImage.getWidth() != designW || frameImage.getHeight() != designH)
-        frameImage = Textures::graphite (designW, designH);
-    g.drawImageAt (frameImage, 0, 0);
+    g.fillAll (juce::Colours::black);
 
-    // logo plate: just the artist logo
-    panelPlate (g, titleRect, 10.0f);
+    // the artist logo, top right
     if (logoImage.isValid())
     {
         g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
-        g.drawImage (logoImage, titleRect.reduced (10, 5).toFloat(), juce::RectanglePlacement::centred);
+        g.setOpacity (1.0f);
+        g.drawImage (logoImage, juce::Rectangle<float> ((float) designW - 150.0f, 4.0f, 126.0f, 60.0f), juce::RectanglePlacement::centred);
     }
 
-    panelPlate (g, headerRect, 10.0f);
+    g.setColour (Palette::text);
+    g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+    g.drawText ("INPUT MODE", juce::Rectangle<int> (238, 170, 150, 22), juce::Justification::centred);
     if (stereoMode)
-        panelPlate (g, channelPlateRect, 10.0f);
+        g.drawText ("CHANNELS", juce::Rectangle<int> (925, 170, 240, 22), juce::Justification::centred);
 
     const bool pedalView = ! tunerOpen && view != View::amp;
-    if (pedalView)
+    if (pedalView && stereoMode)   // left channel above, right channel below
     {
-        if (carpetImage.isNull() || carpetImage.getWidth() != bodyRect.getWidth() || carpetImage.getHeight() != bodyRect.getHeight())
-            carpetImage = Textures::carpet (bodyRect.getWidth(), bodyRect.getHeight());
+        g.setColour (juce::Colours::white.withAlpha (0.18f));
+        g.drawHorizontalLine (channelRect (1).getY() - gap / 2, 24.0f, (float) designW - 24.0f);
 
-        {
-            juce::Graphics::ScopedSaveState save (g);
-            juce::Path clip;
-            clip.addRoundedRectangle (bodyRect.toFloat(), 12.0f);
-            g.reduceClipRegion (clip);
-            g.drawImageAt (carpetImage, bodyRect.getX(), bodyRect.getY());
-        }
-        g.setColour (Palette::silver.withAlpha (0.4f));
-        g.drawRoundedRectangle (bodyRect.toFloat().reduced (1.0f), 12.0f, 1.5f);
-
-        if (stereoMode)   // left channel above, right channel below
-        {
-            g.setColour (Palette::silver.withAlpha (0.35f));
-            g.drawHorizontalLine (channelRect (1).getY() - gap / 2, (float) bodyRect.getX() + 10.0f, (float) bodyRect.getRight() - 10.0f);
-
-            g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
-            for (int ch = 0; ch < 2; ++ch)
-            {
-                auto tag = channelRect (ch).withWidth (sideTagW);
-                g.setColour (Palette::silver.withAlpha (0.85f));
-                g.drawText (ch == 0 ? "LEFT" : "RIGHT", tag, juce::Justification::centred);
-            }
-        }
+        g.setColour (Palette::text);
+        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        for (int ch = 0; ch < 2; ++ch)
+            g.drawText (ch == 0 ? "LEFT" : "RIGHT", channelRect (ch).withWidth (sideTagW + 16), juce::Justification::centred);
     }
-    else if (tunerOpen)
-    {
-        panelPlate (g, bodyRect, 12.0f);
-    }
-
-    g.setColour (Palette::dim);
-    g.setFont (juce::FontOptions (12.0f));
-    juce::String hint = "Scroll over a knob to turn it  |  Shift = fine  |  Double-click = reset";
-    if (view == View::wah && ! tunerOpen)
-        hint = "Drag or scroll over the treadle to sweep the wah  |  AUTO WAH switch follows how hard you pick";
-    if (stereoMode && ! tunerOpen)
-        hint += "  |  Stereo: left channel on top, right channel below";
-    if (tunerOpen)
-        hint = "Tuner open: output muted. Click TUNER again, or any tab, to go back";
-    g.drawText (hint, 24, designH - hintH, designW - 48, hintH - 2, juce::Justification::centredLeft);
 }

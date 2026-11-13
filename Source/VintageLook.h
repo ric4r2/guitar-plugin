@@ -25,7 +25,7 @@ namespace Palette
     const juce::Colour red           { 0xffc4452f };
 }
 
-enum class KnobStyle { chrome, strat, fender };
+enum class KnobStyle { chrome, strat, fender, ring };
 
 // Rotary knob driven by the mouse wheel: each notch moves a fraction of the range, Shift uses a finer one.
 // It draws itself as a chrome knob with a spike pointer, or as a cream Stratocaster barrel knob.
@@ -79,7 +79,7 @@ public:
         setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
         setColour (juce::Label::textColourId, Palette::text);
-        setColour (juce::TextButton::buttonColourId, Palette::graphiteLight);
+        setColour (juce::TextButton::buttonColourId, juce::Colour (0xff1b1b1e));
         setColour (juce::TextButton::buttonOnColourId, Palette::amber);
         setColour (juce::TextButton::textColourOffId, Palette::text);
         setColour (juce::TextButton::textColourOnId, Palette::inkDark);
@@ -104,6 +104,12 @@ public:
         const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
         const auto centre = bounds.getCentre();
         const float angle = startAngle + pos * (endAngle - startAngle);
+
+        if (style == KnobStyle::ring)
+        {
+            drawRingKnob (g, centre, radius, startAngle, endAngle, angle);
+            return;
+        }
 
         if (style == KnobStyle::fender)
         {
@@ -173,13 +179,36 @@ public:
         else if (highlighted)
             base = base.brighter (0.12f);
 
-        g.setGradientFill (juce::ColourGradient (base.brighter (0.15f), r.getX(), r.getY(), base.darker (0.2f), r.getX(), r.getBottom(), false));
+        g.setColour (base);   // flat, like the rest of the frame
         g.fillRoundedRectangle (r, 5.0f);
-        g.setColour (b.findColour (juce::ComboBox::outlineColourId).withAlpha (b.getToggleState() ? 1.0f : 0.7f));
+        g.setColour (b.findColour (juce::ComboBox::outlineColourId).withAlpha (b.getToggleState() ? 0.0f : 0.4f));
         g.drawRoundedRectangle (r, 5.0f, 1.2f);
     }
 
 private:
+    // Minimal knob for the black frame: a thin white circle with a dot, inside an arc that fills with the value.
+    static void drawRingKnob (juce::Graphics& g, juce::Point<float> c, float radius, float startAngle, float endAngle, float angle)
+    {
+        const float outer = radius - 2.0f;
+        const float stroke = juce::jmax (2.0f, radius * 0.07f);
+
+        juce::Path track, value;
+        track.addCentredArc (c.x, c.y, outer, outer, 0.0f, startAngle, endAngle, true);
+        value.addCentredArc (c.x, c.y, outer, outer, 0.0f, startAngle, angle, true);
+        g.setColour (juce::Colour (0xff4a4b50));
+        g.strokePath (track, juce::PathStrokeType (stroke, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (Palette::text);
+        g.strokePath (value, juce::PathStrokeType (stroke, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        const float inner = outer * 0.76f;
+        g.setColour (juce::Colours::white);
+        g.drawEllipse (c.x - inner, c.y - inner, inner * 2.0f, inner * 2.0f, stroke * 0.8f);
+
+        const float dot = juce::jmax (2.0f, radius * 0.07f);
+        const auto p = c + juce::Point<float> (std::sin (angle), -std::cos (angle)) * inner * 0.72f;
+        g.fillEllipse (p.x - dot, p.y - dot, dot * 2.0f, dot * 2.0f);
+    }
+
     // Fender-style amp dial: numbers printed around a cream pointer knob.
     static void drawFenderDial (juce::Graphics& g, juce::Point<float> c, float radius, float startAngle, float endAngle, float angle,
                                 const juce::Slider& slider, juce::Colour scale, juce::Colour body)

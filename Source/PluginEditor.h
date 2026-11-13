@@ -1,29 +1,38 @@
 #pragma once
-#include "Logo.h"
 #include "PluginProcessor.h"
 #include "Textures.h"
 #include "VintageLook.h"
+#include "Widgets.h"
 
-// A knob with its label, bound to a parameter.
+namespace Themes
+{
+    inline KnobTheme ring() { return { KnobStyle::ring, juce::Colours::white, Palette::text, Palette::text, Palette::silver }; }
+}
+
+// A knob with its label, bound to a parameter. The value is shown in a text box under the knob.
 struct KnobUI
 {
     ScrollKnob slider;
     juce::Label label;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+    bool labelBelow = false;
 
     void init (juce::Component& parent, juce::AudioProcessorValueTreeState& apvts, const juce::String& id,
-               const juce::String& text, const KnobTheme& theme)
+               const juce::String& text, const KnobTheme& theme, bool putLabelBelow = false)
     {
+        labelBelow = putLabelBelow;
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, id, slider);
         if (auto* p = apvts.getParameter (id))
             slider.setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
 
         slider.setLook (theme.style, theme.body, theme.scale);
         slider.setColour (juce::Slider::textBoxTextColourId, theme.value);
+        slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        slider.setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
 
         label.setText (text, juce::dontSendNotification);
         label.setJustificationType (juce::Justification::centred);
-        label.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        label.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         label.setColour (juce::Label::textColourId, theme.label);
         parent.addAndMakeVisible (slider);
         parent.addAndMakeVisible (label);
@@ -31,14 +40,50 @@ struct KnobUI
 
     void place (juce::Rectangle<int> column, int labelHeight = 22)
     {
-        label.setBounds (column.removeFromTop (labelHeight));
-        slider.setBounds (column.reduced (4));
+        label.setBounds (labelBelow ? column.removeFromBottom (labelHeight) : column.removeFromTop (labelHeight));
+        slider.setBounds (column.reduced (2));
     }
 
     void show (bool visible)
     {
         slider.setVisible (visible);
         label.setVisible (visible);
+    }
+};
+
+// Ring knob for the top bar: the knob, then its name, then its value.
+struct HeaderKnob
+{
+    ScrollKnob slider;
+    juce::Label label, value;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+
+    void init (juce::Component& parent, juce::AudioProcessorValueTreeState& apvts, const juce::String& id, const juce::String& text)
+    {
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        slider.setLook (KnobStyle::ring, juce::Colours::white, Palette::silver);
+        slider.onValueChange = [this] { value.setText (slider.getTextFromValue (slider.getValue()), juce::dontSendNotification); };
+        attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (apvts, id, slider);
+        if (auto* p = apvts.getParameter (id))
+            slider.setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
+
+        for (auto* l : { &label, &value })
+        {
+            l->setJustificationType (juce::Justification::centred);
+            l->setFont (juce::FontOptions (13.0f, juce::Font::bold));
+            l->setColour (juce::Label::textColourId, Palette::text);
+            parent.addAndMakeVisible (*l);
+        }
+        label.setText (text, juce::dontSendNotification);
+        parent.addAndMakeVisible (slider);
+        slider.onValueChange();
+    }
+
+    void place (juce::Rectangle<int> r)
+    {
+        value.setBounds (r.removeFromBottom (20));
+        label.setBounds (r.removeFromBottom (22));
+        slider.setBounds (r);
     }
 };
 
@@ -69,7 +114,8 @@ private:
     double hz = 0.0;
 };
 
-// The amp, drawn as a tweed combo: control plate with cream Fender-style knobs, and grille cloth with the logo below.
+// The amp fills the window edge to edge: carry handle, tweed cabinet, a control panel divided into sections
+// (input, preamp, tone, reverb, master, logo) with cream pointer knobs, and the grille cloth below.
 // One amp in mono mode, two (left above right) in stereo mode.
 class AmpView : public juce::Component
 {
@@ -86,12 +132,18 @@ private:
     struct Strip
     {
         std::array<KnobUI, numKnobs> knobs;
-        juce::Label name;
         juce::TextButton revType { "PLATE" };
         int revState = 0;
     };
 
-    void layoutAmp (int index, juce::Rectangle<int> cabinetArea, bool stereoRow);
+    struct Group { juce::String title; juce::Rectangle<int> area; };
+    struct Layout
+    {
+        juce::Rectangle<int> cabinet, panel, grille, jack, badge;
+        std::vector<Group> groups;
+    };
+
+    void layoutAmp (int index, juce::Rectangle<int> area);
     void paintAmp (juce::Graphics&, int index);
     void updateVisibility();
 
@@ -99,20 +151,19 @@ private:
     const juce::Image& logo;
     std::array<Strip, 2> strips;
     std::array<std::unique_ptr<juce::ParameterAttachment>, 2> revAttach;
-    std::array<juce::Rectangle<int>, 2> cabinet, plate, grille;
+    std::array<Layout, 2> lay;
     juce::Image tweedImage, grilleImage;
     bool stereo = false;
 };
 
-// A stompbox shaped like a real one: a tall rectangle of brushed aluminum with the name on top, the knobs below it,
-// and the aluminum footswitch with its colored LED at the bottom. `strip` picks the left (0) or right (1) channel.
+// A stompbox floating on the black background: a colored enclosure seen slightly from above, a brushed aluminum
+// face with the knobs, the pedal's name in script, and the footswitch with its LED.
 class PedalPanel : public juce::Component
 {
 public:
     PedalPanel (juce::AudioProcessorValueTreeState&, const Params::PedalDef&, int strip);
 
-    int getNumKnobs() const { return (int) knobs.size(); }
-    int preferredWidth() const { return knobs.size() <= 2 ? 150 : 220; }
+    int preferredWidth() const { return knobs.size() <= 2 ? 176 : 240; }
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -122,10 +173,10 @@ private:
 
     const Params::PedalDef& def;
     Colours colours;
-    FootSwitch footSwitch;
+    StompSwitch footSwitch;
     std::vector<std::unique_ptr<KnobUI>> knobs;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAttach;
-    juce::Rectangle<int> titleArea;
+    juce::Rectangle<int> titleArea, creditArea;
     juce::Image brushed;
 };
 
@@ -171,7 +222,7 @@ public:
 
 private:
     WahTreadle treadle;
-    FootSwitch footSwitch { juce::Colour (0xffb56bff) };
+    StompSwitch footSwitch { juce::Colour (0xffb56bff) };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAttach;
     juce::Rectangle<int> titleArea;
     juce::Image brushed;
@@ -207,7 +258,7 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
 
-    FootSwitch footSwitch { juce::Colour (0xff42a9ff) };
+    StompSwitch footSwitch { juce::Colour (0xff42a9ff) };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAttach;
     std::array<Band, Params::numEqBands> bands;
     std::array<juce::dsp::IIR::Coefficients<float>::Ptr, Params::numEqBands> coefs;
@@ -215,8 +266,8 @@ private:
     juce::Image brushed;
 };
 
-// Footer shown under every view: tuner button, then the metronome in one horizontal row.
-// Tempo and time signature are typed with the keyboard (the wheel and arrow keys also nudge them).
+// Slim footer under every view: tuner, then the metronome in one row (play/pause, tap, tempo, time signature,
+// pulse lights, click volume). Tempo and signature are typed with the keyboard; the wheel and arrow keys nudge them.
 class FooterBar : public juce::Component, private juce::Timer
 {
 public:
@@ -225,7 +276,7 @@ public:
     void resized() override;
     void paint (juce::Graphics&) override;
 
-    juce::TextButton tunerButton { "TUNER" };
+    IconButton tunerButton { Icon::tuner };
 
 private:
     void timerCallback() override { repaint (dotsArea); }
@@ -235,16 +286,17 @@ private:
     PlayPauseButton playButton;
     NumberBox bpmBox { 30, 260, 3 }, beatsBox { 1, 16, 2 }, noteBox { 2, 16, 2 };
     juce::TextButton tapButton { "TAP" };
-    juce::Label tempoLabel, sigLabel, slashLabel;
-    KnobUI vol;
+    juce::Label slashLabel, clickLabel;
+    ScrollKnob clickKnob;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> clickAttach;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> playAttach;
     juce::ParameterAttachment bpmAttach, beatsAttach, noteAttach;
     std::vector<double> taps;
     juce::Rectangle<int> dotsArea;
 };
 
-// Preset bar at the top centre: step through presets, pick one from a menu, save, create and delete.
-// A modified preset shows an asterisk after its name (like an unsaved tab in a code editor); saving removes it.
+// Presets, top centre: icons to save, create and delete, then the name between two arrows.
+// A modified preset shows an asterisk before its name (like an unsaved tab in a code editor); saving removes it.
 class PresetBar : public juce::Component, private juce::Timer
 {
 public:
@@ -265,7 +317,8 @@ private:
     void askName (const juce::String& title, const juce::String& initial, std::function<void (const juce::String&)> onName);
 
     GuitarDriveProcessor& proc;
-    juce::TextButton prevButton { "<" }, nextButton { ">" }, nameButton, saveButton { "SAVE" }, newButton { "NEW" }, deleteButton { "DELETE" };
+    IconButton prevButton { Icon::prev }, nextButton { Icon::next }, saveButton { Icon::save }, newButton { Icon::plus }, deleteButton { Icon::trash };
+    juce::TextButton nameButton;
     juce::String shownText;
 };
 
@@ -288,7 +341,7 @@ private:
         void paint (juce::Graphics& g) override { if (painter) painter (g); }
     };
 
-    // pan, solo and mute of one channel, shown in the header in stereo mode
+    // pan, solo and mute of one channel, shown in the top bar in stereo mode
     struct ChannelControls
     {
         KnobUI pan;
@@ -309,18 +362,20 @@ private:
     float fitScale() const;
     void keepOnScreen();
 
-    static constexpr int presetBarH = 44, headerH = 104, gap = 8, footerH = 84, hintH = 26, designW = 1360;
-    static constexpr int monoBodyH = 340, stereoHalfH = 330, sideTagW = 64;
+    static constexpr int designW = 1360, topH = 220, footerH = 64, gap = 8;
+    static constexpr int monoBodyH = 430, stereoHalfH = 320, sideTagW = 64;
 
     GuitarDriveProcessor& proc;
     VintageLook look;
     Root root;
     juce::Image logoImage;
 
-    std::array<juce::TextButton, 5> tabs;
-    KnobUI inputKnob, outputKnob;
+    std::array<std::unique_ptr<IconButton>, 5> tabs;
+    HeaderKnob inputKnob, outputKnob;
+    LevelMeter inputMeter, outputMeter;
+    PillSwitch stereoSwitch { "STEREO", "MONO" };
     std::array<ChannelControls, 2> channels;
-    juce::TextButton stereoButton { "STEREO" }, rightInButton { "R USES IN 1" };
+    juce::TextButton rightInButton { "RIGHT = INPUT 1" };
     AmpView ampView;
     std::array<std::unique_ptr<WahView>, 2> wahViews;
     std::array<std::unique_ptr<PedalBoard>, 2> preBoards, postBoards;
@@ -330,9 +385,8 @@ private:
     TunerView tunerView;
     juce::ParameterAttachment stereoAttach, rightInAttach, soloAttach;
 
-    juce::Image frameImage, carpetImage;
-    juce::Rectangle<int> titleRect, headerRect, channelPlateRect, bodyRect, footerRect;
-    int designH = 550, bodyH = monoBodyH, soloState = 0;
+    juce::Rectangle<int> bodyRect, footerRect;
+    int designH = 714, bodyH = monoBodyH, soloState = 0;
     View view = View::amp;
     bool stereoMode = false, tunerOpen = false, rightUsesIn1 = true, sizeInitialised = false;
 

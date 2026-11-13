@@ -53,6 +53,9 @@ public:
 
     const Metronome& getMetronome() const { return metronome; }
 
+    // block peaks for the level meters; the editor reads and clears them
+    std::atomic<float> inputPeak { 0.0f }, outputPeak { 0.0f };
+
     juce::AudioProcessorValueTreeState apvts { *this, nullptr, "STATE", createLayout() };
     PresetManager presets { apvts, *this, defaultPresetFolder() };
 
