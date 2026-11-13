@@ -158,7 +158,7 @@ void PresetManager::seedFactoryPresets()
     struct Factory { const char* name; std::vector<std::pair<const char*, float>> changes; };
     const std::vector<Factory> presets = {
         { "Init", {} },
-        // Twin Reverb for headroom, light compression, spring reverb
+        // Two-Rock for headroom, light compression, spring reverb
         { "Mayer Clean", { { "amptype", 1.0f }, { "comp_on", 1.0f }, { "comp_sustain", 3.5f }, { "comp_level", 5.5f },
                            { "gain", 4.5f }, { "bass", 5.0f }, { "mid", 4.5f }, { "treble", 6.0f },
                            { "reverb", 3.0f }, { "revtype", 1.0f } } },

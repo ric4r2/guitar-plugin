@@ -39,7 +39,7 @@ public:
     // strip 1 the right channel, whose parameter ids carry an "r_" prefix.
     static constexpr const char* panId = "pan";            // -1 (left) .. +1 (right), stereo mode only
     static constexpr const char* revTypeId = "revtype";    // 0 = plate (smooth), 1 = spring
-    static constexpr const char* ampTypeId = "amptype";    // 0 = Deluxe Reverb, 1 = Twin Reverb
+    static constexpr const char* ampTypeId = "amptype";    // 0 = Fender (Deluxe Reverb), 1 = Two-Rock
     static constexpr const char* stereoId = "stereo";      // false = mono (default), true = two channels
     static constexpr const char* soloId = "solo";          // 0 = off, 1 = left soloed (right muted), 2 = right soloed (left muted)
     static constexpr const char* rightSameId = "rightsame";   // stereo mode: true = right channel hears input 1 too, false = input 2

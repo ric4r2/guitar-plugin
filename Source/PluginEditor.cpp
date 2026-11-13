@@ -263,9 +263,9 @@ AmpView::AmpView (GuitarDriveProcessor& p, const juce::Image& logoImage)
             });
         strip.revType.onClick = [this, s] { revAttach[(size_t) s]->setValueAsCompleteGesture (strips[(size_t) s].revState != 0 ? 0.0f : 1.0f); };
 
-        // amp model: AB763 Deluxe Reverb (breaks up early) or Twin Reverb (huge clean headroom)
+        // amp model: Fender (AB763 Deluxe Reverb, breaks up early) or Two-Rock (big, stiff, clean)
         styleAmpButton (strip.ampType);
-        strip.ampType.setTooltip ("DELUXE: 22 W Deluxe Reverb, breaks up around volume 5. TWIN: 85 W Twin Reverb, stays clean.");
+        strip.ampType.setTooltip ("FENDER: Deluxe Reverb with its 1x12 cabinet, breaks up around volume 5. TWO-ROCK: big clean amp with its 2x12 cabinet, stays clean much louder.");
         addAndMakeVisible (strip.ampType);
         ampAttach[(size_t) s] = std::make_unique<juce::ParameterAttachment> (
             *apvts.getParameter (GuitarDriveProcessor::paramId (s, GuitarDriveProcessor::ampTypeId)),
@@ -273,7 +273,7 @@ AmpView::AmpView (GuitarDriveProcessor& p, const juce::Image& logoImage)
             {
                 auto& st = strips[(size_t) s];
                 st.ampState = v > 0.5f ? 1 : 0;
-                st.ampType.setButtonText (st.ampState != 0 ? "TWIN" : "DELUXE");
+                st.ampType.setButtonText (st.ampState != 0 ? "TWO-ROCK" : "FENDER");
                 st.ampType.setToggleState (st.ampState != 0, juce::dontSendNotification);
             });
         strip.ampType.onClick = [this, s] { ampAttach[(size_t) s]->setValueAsCompleteGesture (strips[(size_t) s].ampState != 0 ? 0.0f : 1.0f); };

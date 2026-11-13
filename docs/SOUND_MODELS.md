@@ -3,37 +3,49 @@
 The goal is a real John Mayer / SRV style clean to edge-of-breakup sound. This page explains what is simulated from
 real circuits, what is still an approximation, and where every number comes from.
 
-## Amp: Fender AB763 "blackface" (Deluxe Reverb or Twin Reverb)
+## Amps: Fender or Two-Rock
 
-Pick the amp with the **DELUXE / TWIN** switch under the input jack.
+Pick the amp with the **FENDER / TWO-ROCK** switch under the input jack. Each amp has its own speaker cabinet.
 
-| Stage | What it is in the real amp | How it is modelled |
-|---|---|---|
-| V1A | 12AX7, 100k plate load, 1.5k cathode resistor (bypassed), about 270 V | Norman Koren's 12AX7 equations, solved on the load line for every input voltage |
-| Tone stack | Fender treble / middle / bass network: 250k treble, 250k bass, 100k slope, 250pF, 0.1uF, 0.047uF (Deluxe); 10k mid pot and 120pF in the Twin | Yeh & Smith's exact transfer function of the network, turned into a digital filter with the bilinear transform |
-| Volume | 1M audio-taper pot after the tone stack | about 10 % of the signal at 5, like the real pot |
-| V1B | 12AX7, 100k plate, shared 820 ohm cathode | Same Koren model |
-| Power amp | Long-tail-pair phase inverter and two 6V6 (Deluxe, 22 W) or four 6L6 (Twin, 85 W), negative feedback | Symmetric push-pull clip with supply sag. The Twin gets far more headroom |
-| Speaker | Open-back 1x12 (Deluxe) or 2x12 (Twin) | Filters: low cut, cone resonance, presence peak, steep top-end roll-off |
+| Stage | Fender (AB763 Deluxe Reverb) | Two-Rock (clean channel) | How it is modelled |
+|---|---|---|---|
+| V1A | 12AX7, 100k plate, 1.5k cathode, about 270 V | same type of stage | Norman Koren's 12AX7 equations, solved on the load line |
+| Tone stack | 250k treble, 250k bass, 100k slope, 250pF / 0.1uF / 0.047uF, 6.8k mid | Same network with a 25k mid pot and 47nF / 22nF caps: much less mid scoop, tighter bass | Yeh & Smith's exact transfer function, bilinear transform |
+| Into V1B | volume pot straight into V1B | volume pot, then an interstage divider (gain structure) | the Two-Rock's second stage clips much later |
+| Power amp | two 6V6, 22 W, soft supply | 6L6, big stiff supply | push-pull clip with sag; the Two-Rock has about 2.7x the headroom and a third of the sag |
+| Cabinet | open-back 1x12, Jensen/Oxford-type alnico voice | open-back 2x12, 65 W Celestion-type (TR-65 family) | impulse response built from the speaker's response curve (see below) |
 
-Everything from V1A to the power tubes runs at 4x the sample rate, so the harmonics don't alias.
+Two-Rock does not publish schematics. Its model uses the documented Dumble-lineage topology with values chosen for
+its known voice, not traced component values.
 
 The knobs:
 
 * **GAIN** is the amp's volume pot.
-* **BASS / MID / TREBLE** are the real tone stack. MID at 5 is the stock Deluxe (6.8k).
-* **WARMTH** is how hard the power tubes work. 3 is the stock amp. Higher means more compression and sag, at about the same loudness.
-* **MASTER** is just the output level.
+* **BASS / MID / TREBLE** are the real tone stack.
+* **WARMTH** is how hard the power tubes work. 3 is the stock amp.
+* **MASTER** is the output level.
 
 How distorted a firm single-coil note gets (0.25 V, from the test program):
 
 | Volume | 3 | 4 | 5 | 6 | 7 | 8 | 10 |
 |---|---|---|---|---|---|---|---|
-| Deluxe THD % | 0.8 | 2.1 | 11 | 22 | 30 | 35 | 40 |
-| Twin THD % | 0.6 | 0.6 | 1.3 | 5 | 13 | 21 | 33 |
+| Fender THD % | 0.8 | 2.2 | 12 | 23 | 32 | 38 | 44 |
+| Two-Rock THD % | 0.8 | 0.5 | 0.5 | 2.1 | 6.9 | 14 | 27 |
 
-So the Deluxe is clean up to about 4 and breaks up around 5 to 6, as players describe the real amp. The Twin stays
-clean until about 6.
+### Speaker cabinets
+
+The built-in cabinets are impulse responses that the program builds itself:
+
+1. It takes each speaker's close-miked response curve: the low-end fall, the cone resonance, the presence peak and the top-end roll-off.
+2. It adds the narrow cone break-up peaks and dips that a microphone picks up above about 1 kHz.
+3. It turns the result into a 46 ms minimum-phase impulse response and plays it through convolution.
+
+They need no downloaded files and are part of the repository.
+
+**Recorded cabinets (your own build only).** You can put a recorded IR at `Assets/private-ir/fender.wav` and/or
+`Assets/private-ir/tworock.wav` and rebuild. It then replaces the built-in cabinet for that amp, at the same
+loudness. That folder is git-ignored, because most free IRs may be used but not redistributed. Don't share a build
+that contains them.
 
 ## Tube Screamer: Ibanez TS808
 
@@ -51,7 +63,7 @@ the low end tight.
 ## Still approximations
 
 * **Compressor, overdrive, wah, phaser, chorus, tremolo, delay, digital reverb**: generic designs, not copies of a particular pedal.
-* **Speaker**: filters, not a measured impulse response of a real cabinet.
+* **Built-in cabinets**: made from response curves, not microphone recordings. Recorded IRs can replace them (see above).
 * **Spring and plate reverb**: algorithmic.
 * **TS808 tone stage**: built from published corner frequencies, not a full component-level solve.
 

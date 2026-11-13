@@ -8,26 +8,6 @@ namespace amp
     {
         double softplus (double x) { return x > 30.0 ? x : std::log1p (std::exp (x)); }
 
-        // RBJ cookbook biquads, used by the speaker
-        void setPeak (double fs, double f, double q, double db, double& b0, double& b1, double& b2, double& a1, double& a2)
-        {
-            const double A = std::pow (10.0, db / 40.0), w = 2.0 * juce::MathConstants<double>::pi * f / fs;
-            const double alpha = std::sin (w) / (2.0 * q), c = std::cos (w), a0 = 1.0 + alpha / A;
-            b0 = (1.0 + alpha * A) / a0; b1 = -2.0 * c / a0; b2 = (1.0 - alpha * A) / a0;
-            a1 = -2.0 * c / a0; a2 = (1.0 - alpha / A) / a0;
-        }
-
-        void setHighPass (double fs, double f, double q, double& b0, double& b1, double& b2, double& a1, double& a2)
-        {
-            const double w = 2.0 * juce::MathConstants<double>::pi * f / fs, alpha = std::sin (w) / (2.0 * q), c = std::cos (w), a0 = 1.0 + alpha;
-            b0 = (1.0 + c) / 2.0 / a0; b1 = -(1.0 + c) / a0; b2 = b0; a1 = -2.0 * c / a0; a2 = (1.0 - alpha) / a0;
-        }
-
-        void setLowPass (double fs, double f, double q, double& b0, double& b1, double& b2, double& a1, double& a2)
-        {
-            const double w = 2.0 * juce::MathConstants<double>::pi * f / fs, alpha = std::sin (w) / (2.0 * q), c = std::cos (w), a0 = 1.0 + alpha;
-            b0 = (1.0 - c) / 2.0 / a0; b1 = (1.0 - c) / a0; b2 = b0; a1 = -2.0 * c / a0; a2 = (1.0 - alpha) / a0;
-        }
     }
 
     // ------------------------------------------------------------ 12AX7
@@ -213,7 +193,7 @@ namespace amp
 
     float PowerAmp::process (float v, float drive)
     {
-        const float headroom = 1.0f - 0.18f * juce::jmin (1.0f, env);   // supply sag after loud playing
+        const float headroom = 1.0f - sag * juce::jmin (1.0f, env);   // supply sag after loud playing
         const float u = v * drive / headroom;
         // push-pull with negative feedback: clean and symmetric until close to full power, then a firm knee
         const float a = std::abs (u);
@@ -223,37 +203,5 @@ namespace amp
         const float level = std::abs (out);
         env += (level > env ? attack : release) * (level - env);
         return out;
-    }
-
-    // ------------------------------------------------------------ speaker
-
-    void Speaker::prepare (double sampleRate, bool twin)
-    {
-        auto& s = stages;
-        // 1x12 Jensen-style in the Deluxe; 2x12 in the Twin: tighter low end, more top
-        setHighPass (sampleRate, twin ? 85.0 : 75.0, 0.9, s[0].b0, s[0].b1, s[0].b2, s[0].a1, s[0].a2);        // open back: little deep bass
-        setPeak (sampleRate, twin ? 100.0 : 110.0, 1.2, 2.5, s[1].b0, s[1].b1, s[1].b2, s[1].a1, s[1].a2);      // cone resonance
-        setPeak (sampleRate, twin ? 3000.0 : 2500.0, 1.2, 2.5, s[2].b0, s[2].b1, s[2].b2, s[2].a1, s[2].a2);    // presence
-        setLowPass (sampleRate, twin ? 6000.0 : 5200.0, 0.7, s[3].b0, s[3].b1, s[3].b2, s[3].a1, s[3].a2);      // steep top-end fall
-        setLowPass (sampleRate, twin ? 7500.0 : 6500.0, 1.0, s[4].b0, s[4].b1, s[4].b2, s[4].a1, s[4].a2);
-        setHighPass (sampleRate, 40.0, 0.7, s[5].b0, s[5].b1, s[5].b2, s[5].a1, s[5].a2);           // output transformer low end
-        reset();
-    }
-
-    void Speaker::reset()
-    {
-        for (auto& s : stages)
-            s.z1 = s.z2 = 0.0;
-    }
-
-    void Speaker::process (float* x, int n)
-    {
-        for (int i = 0; i < n; ++i)
-        {
-            float y = x[i];
-            for (auto& s : stages)
-                y = s.process (y);
-            x[i] = y;
-        }
     }
 }

@@ -1,8 +1,26 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "BinaryData.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 
 namespace
 {
+    // a recorded cabinet impulse response embedded from Assets/private-ir (only in builds that have the file)
+    [[maybe_unused]] bool loadEmbeddedIR (const char* data, int size, juce::AudioBuffer<float>& ir, double& rate)
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatReader> reader (wav.createReaderFor (new juce::MemoryInputStream (data, (size_t) size, false), true));
+        if (reader == nullptr || reader->lengthInSamples <= 0)
+            return false;
+
+        rate = reader->sampleRate;
+        const int length = (int) juce::jmin<juce::int64> (reader->lengthInSamples, (juce::int64) (rate * 0.5));   // cabinets need no more
+        ir.setSize (1, length);
+        reader->read (&ir, 0, length, 0, true, false);   // left channel of a stereo file
+        cab::normaliseAt1k (ir, rate);
+        return true;
+    }
+
     using ParamList = std::vector<std::unique_ptr<juce::RangedAudioParameter>>;
 
     void addKnob (ParamList& p, const juce::String& id, const juce::String& name, const Params::KnobDef& k)
@@ -31,6 +49,23 @@ GuitarDriveProcessor::GuitarDriveProcessor()
     outputPtr = raw (Params::outputKnob().id);
     for (int s = 0; s < 2; ++s)
         panPtr[s] = raw (paramId (s, panId));
+
+    // recorded cabinets replace the built-in ones when this build has them
+    {
+        juce::AudioBuffer<float> ir;
+        double rate = 0.0;
+        juce::ignoreUnused (ir, rate);
+       #if GUITARDRIVE_IR_FENDER
+        if (loadEmbeddedIR (BinaryData::fender_wav, BinaryData::fender_wavSize, ir, rate))
+            for (auto& strip : strips)
+                strip.setCabinetIR (0, ir, rate);
+       #endif
+       #if GUITARDRIVE_IR_TWOROCK
+        if (loadEmbeddedIR (BinaryData::tworock_wav, BinaryData::tworock_wavSize, ir, rate))
+            for (auto& strip : strips)
+                strip.setCabinetIR (1, ir, rate);
+       #endif
+    }
 
     metroOnPtr = raw (Params::metroOn);
     metroBpmPtr = raw (Params::metroBpm);
@@ -72,7 +107,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
         p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { paramId (strip, revTypeId), 1 }, prefix + "Reverb Type",
                                                              StringArray { "Plate", "Spring" }, 0));
         p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { paramId (strip, ampTypeId), 1 }, prefix + "Amp Model",
-                                                             StringArray { "Deluxe Reverb", "Twin Reverb" }, 0));
+                                                             StringArray { "Fender", "Two-Rock" }, 0));
 
         // pedals before the amp, and the effects after the equalizer
         addSwitch (p, paramId (strip, Params::wahOn), prefix + "Wah On", false);

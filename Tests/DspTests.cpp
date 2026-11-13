@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "AmpModel.h"
+#include "CabinetIR.h"
+#include <thread>
 #include "ChannelStrip.h"
 #include "Effects.h"
 #include "Logo.h"
@@ -556,6 +558,18 @@ namespace
         dir.deleteRecursively();
     }
 
+    // the speaker cabinets load on a background thread: feed silence until they are in use, then start clean
+    void waitForCabinets (ChannelStrip& strip, int block)
+    {
+        std::vector<float> z ((size_t) block, 0.0f), l ((size_t) block), r ((size_t) block);
+        for (int i = 0; i < 4000 && ! strip.cabinetsReady(); ++i)
+        {
+            strip.process (z.data(), l.data(), r.data(), block);
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        }
+        strip.reset();
+    }
+
     struct StripFixture
     {
         std::atomic<float> gate { 0 }, trans { 0 }, gain { 5 }, warmth { 3 }, bass { 5 }, mid { 5 }, treble { 5 }, reverb { 2.5f }, master { 8 }, revType { 0 }, ampType { 0 };
@@ -595,6 +609,7 @@ namespace
         ChannelStrip strip;
         strip.setParams (fx.params());
         strip.prepare (sr, blockSize);
+        waitForCabinets (strip, blockSize);
 
         const auto in = pluck (196.0, (int) (sr * 2.0));
         std::vector<float> l (in.size()), r (in.size());
@@ -651,6 +666,7 @@ namespace
         ChannelStrip strip;
         strip.setParams (f.params());
         strip.prepare (sr, 256);
+        waitForCabinets (strip, 256);
         std::vector<float> l (in.size()), r (in.size());
         for (size_t s = 0; s < in.size(); s += 256)
             strip.process (in.data() + s, l.data() + s, r.data() + s, (int) std::min<size_t> (256, in.size() - s));
@@ -706,17 +722,39 @@ namespace
 
         // breakup: how distorted a firm single-coil note (0.25 V) is as the volume goes up
         std::printf ("      distortion (THD %%) of a 0.25 V note by volume:\n");
-        double deluxe[11] {}, twin[11] {};
+        double deluxe[11] {}, twoRock[11] {};
         for (int v = 1; v <= 10; ++v)
         {
             deluxe[v] = thdOfStrip (0, (float) v, 0.25f);
-            twin[v] = thdOfStrip (1, (float) v, 0.25f);
-            std::printf ("        volume %2d   Deluxe %6.2f   Twin %6.2f\n", v, deluxe[v], twin[v]);
+            twoRock[v] = thdOfStrip (1, (float) v, 0.25f);
+            std::printf ("        volume %2d   Fender %6.2f   Two-Rock %6.2f\n", v, deluxe[v], twoRock[v]);
         }
-        std::snprintf (buf, sizeof buf, "Deluxe %.1f%% at 3, %.1f%% at 10", deluxe[3], deluxe[10]);
-        check ("amp: Deluxe is clean low and breaks up high", deluxe[3] < 2.0 && deluxe[10] > 8.0, buf);
-        std::snprintf (buf, sizeof buf, "volume 6: Deluxe %.1f%%, Twin %.1f%%", deluxe[6], twin[6]);
-        check ("amp: Twin has more clean headroom", twin[6] < deluxe[6], buf);
+        std::snprintf (buf, sizeof buf, "Fender %.1f%% at 3, %.1f%% at 10", deluxe[3], deluxe[10]);
+        check ("amp: Fender is clean low and breaks up high", deluxe[3] < 2.0 && deluxe[10] > 8.0, buf);
+        std::snprintf (buf, sizeof buf, "volume 6: Fender %.1f%%, Two-Rock %.1f%%", deluxe[6], twoRock[6]);
+        check ("amp: Two-Rock has more clean headroom", twoRock[6] < deluxe[6], buf);
+
+        amp::ToneStack tr;
+        tr.prepare (osr, amp::twoRock);
+        const double trScoop = db (tr.analogMagnitude (3000.0) / tr.analogMagnitude (500.0));
+        ts.prepare (osr, amp::deluxeReverb);
+        const double fenderScoop = db (ts.analogMagnitude (3000.0) / ts.analogMagnitude (500.0));
+        std::snprintf (buf, sizeof buf, "3 kHz over 500 Hz at 5/5/5: Fender %.1f dB, Two-Rock %.1f dB", fenderScoop, trScoop);
+        check ("tone stack: Two-Rock is less scooped", trScoop < fenderScoop, buf);
+
+        // built-in cabinets
+        for (int m = 0; m < 2; ++m)
+        {
+            const auto ir = cab::build ((cab::Model) m, sr);
+            bool finite = true;
+            for (int i = 0; i < ir.getNumSamples(); ++i)
+                finite = finite && std::isfinite (ir.getSample (0, i));
+            const auto at = [&] (double hz) { return db (cab::magnitudeAt (ir, sr, hz)); };
+            std::snprintf (buf, sizeof buf, "%d ms; 50 Hz %.1f, 120 Hz %.1f, 1 kHz %.1f, 2.7 kHz %.1f, 8 kHz %.1f dB",
+                           (int) (1000.0 * ir.getNumSamples() / sr), at (50.0), at (120.0), at (1000.0), at (2700.0), at (8000.0));
+            check (m == 0 ? "cabinet: Fender 1x12 has a speaker's shape" : "cabinet: Two-Rock 2x12 has a speaker's shape",
+                   finite && at (50.0) < -10.0 && at (120.0) > -3.0 && std::abs (at (1000.0)) < 3.0 && at (2700.0) > 0.0 && at (8000.0) < -20.0, buf);
+        }
     }
 }
 
@@ -757,6 +795,7 @@ namespace
         ChannelStrip strip;
         strip.setParams (fixture.params());
         strip.prepare (sr, block);
+        waitForCabinets (strip, block);
         std::vector<float> l (in.size()), r (in.size());
         for (size_t s = 0; s < in.size(); s += (size_t) block)
             strip.process (in.data() + s, l.data() + s, r.data() + s, (int) std::min<size_t> ((size_t) block, in.size() - s));

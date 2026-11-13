@@ -21,7 +21,7 @@ juce_add_plugin(GuitarDrive
 target_sources(GuitarDrive PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/AmpModel.cpp Source/ChannelStrip.cpp
+    Source/AmpModel.cpp Source/CabinetIR.cpp Source/ChannelStrip.cpp
     Source/Effects.cpp
     Source/Presets.cpp)
 
@@ -38,7 +38,7 @@ target_compile_definitions(GuitarDrive PUBLIC
 option(GUITARDRIVE_BUILD_TESTS "Build the offline DSP tests" OFF)
 if(GUITARDRIVE_BUILD_TESTS)
     juce_add_console_app(GuitarDriveTests PRODUCT_NAME "GuitarDriveTests")
-    target_sources(GuitarDriveTests PRIVATE Tests/DspTests.cpp Source/AmpModel.cpp Source/ChannelStrip.cpp Source/Effects.cpp Source/Presets.cpp)
+    target_sources(GuitarDriveTests PRIVATE Tests/DspTests.cpp Source/AmpModel.cpp Source/CabinetIR.cpp Source/ChannelStrip.cpp Source/Effects.cpp Source/Presets.cpp)
     target_include_directories(GuitarDriveTests PRIVATE Source)
     target_compile_definitions(GuitarDriveTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
     target_link_libraries(GuitarDriveTests PRIVATE
@@ -56,7 +56,21 @@ if(ASIO_SDK_DIR AND EXISTS "${ASIO_SDK_DIR}/common/asio.h")
 endif()
 
 # The logo is an image file embedded in the program (replace Assets/joe-garcia-logo.png to change it).
-juce_add_binary_data(GuitarDriveAssets SOURCES Assets/joe-garcia-logo.png)
+# Recorded cabinet impulse responses for your own build only. Files in Assets/private-ir/ are never committed (most
+# free IRs may be used but not redistributed). When present they replace the built-in cabinets.
+set(GUITARDRIVE_ASSETS Assets/joe-garcia-logo.png)
+foreach(ir fender tworock)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Assets/private-ir/${ir}.wav")
+        list(APPEND GUITARDRIVE_ASSETS "Assets/private-ir/${ir}.wav")
+        string(TOUPPER ${ir} IR_UPPER)
+        list(APPEND GUITARDRIVE_IR_DEFS "GUITARDRIVE_IR_${IR_UPPER}=1")
+        message(STATUS "Using private cabinet IR: Assets/private-ir/${ir}.wav")
+    endif()
+endforeach()
+juce_add_binary_data(GuitarDriveAssets SOURCES ${GUITARDRIVE_ASSETS})
+if(GUITARDRIVE_IR_DEFS)
+    target_compile_definitions(GuitarDrive PRIVATE ${GUITARDRIVE_IR_DEFS})
+endif()
 
 target_link_libraries(GuitarDrive PRIVATE
     GuitarDriveAssets

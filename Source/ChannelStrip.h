@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 #include "AmpModel.h"
+#include "CabinetIR.h"
 #include "Effects.h"
 #include "Params.h"
 #include "PlateReverb.h"
@@ -54,7 +55,7 @@ public:
         const std::atomic<float>* reverb = nullptr;
         const std::atomic<float>* master = nullptr;
         const std::atomic<float>* revType = nullptr;   // 0 = plate, 1 = spring
-        const std::atomic<float>* ampType = nullptr;   // 0 = Deluxe Reverb, 1 = Twin Reverb
+        const std::atomic<float>* ampType = nullptr;   // 0 = Fender Deluxe Reverb, 1 = Two-Rock
 
         // pedals before the amp
         const std::atomic<float>* wahOn = nullptr;
@@ -82,6 +83,12 @@ public:
     };
 
     void setParams (const Params& p) { params = p; }
+
+    // Use a recorded cabinet impulse response instead of the built-in one for an amp (0 = Fender, 1 = Two-Rock).
+    // Call before prepare().
+    void setCabinetIR (int model, const juce::AudioBuffer<float>& ir, double irSampleRate);
+    // the cabinets load on a background thread; true once both are in use
+    bool cabinetsReady() const;
     void prepare (double sampleRate, int maxBlockSize);
     void reset();
     int getLatencySamples() const { return (int) oversampling.getLatencyInSamples(); }
@@ -111,9 +118,11 @@ private:
     amp::TriodeStage v1a, v1b;
     amp::ToneStack toneStack;
     amp::PowerAmp powerAmp;
-    amp::Speaker speakerL, speakerR;
+    std::array<juce::dsp::Convolution, 2> cabinets;            // Fender and Two-Rock speaker cabinets
+    std::array<juce::AudioBuffer<float>, 2> customIR;
+    std::array<double, 2> customIRRate {};
     int ampModel = -1;
-    float baseDrive = 0.125f, outputTrim = 1.0f;
+    float baseDrive = 0.125f, outputTrim = 1.0f, preampPad = 1.0f;
     float coupleState = 0.0f, coupleCoef = 0.0f;               // coupling capacitor after V1B
     float sendHp1 = 0.0f, sendHp2 = 0.0f, sendHpCoef = 0.0f;   // keeps low-mids out of the reverb
 

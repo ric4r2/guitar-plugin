@@ -134,7 +134,7 @@ private:
         std::array<KnobUI, numKnobs> knobs;
         juce::TextButton revType { "PLATE" };
         int revState = 0;
-        juce::TextButton ampType { "DELUXE" };
+        juce::TextButton ampType { "FENDER" };
         int ampState = 0;
     };
 

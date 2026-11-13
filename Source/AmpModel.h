@@ -5,7 +5,7 @@
 
 // A blackface Fender (AB763 Deluxe Reverb style) amp, built from its circuit:
 //   12AX7 stage (V1A) -> treble/middle/bass tone stack -> volume pot -> 12AX7 stage (V1B)
-//   -> phase inverter and 6V6 push-pull power amp with supply sag -> output transformer -> speaker
+//   -> phase inverter and push-pull power amp with supply sag. The speaker cabinet is in CabinetIR.h.
 // Voltages are real volts: 1.0 in the digital signal is 1 V at the input jack.
 namespace amp
 {
@@ -37,8 +37,10 @@ namespace amp
     // AB763 Deluxe Reverb: treble pot 250k, bass pot 250k, slope 100k, 250pF, .1uF, .047uF. The Deluxe has a fixed
     // 6.8k mid resistor; here it is a 13.6k pot so that MID at 5 is exactly the stock amp.
     inline constexpr ToneStackValues deluxeReverb { 250e3, 250e3, 13.6e3, 100e3, 250e-12, 100e-9, 47e-9 };
-    // AB763 Twin Reverb: same network with a real 10k middle pot and the smaller treble cap (Guitarix "twin" values)
-    inline constexpr ToneStackValues twinReverb { 250e3, 250e3, 10e3, 100e3, 120e-12, 100e-9, 47e-9 };
+    // Two-Rock style (Dumble lineage) clean channel. Two-Rock does not publish schematics, so these are the same
+    // treble/middle/bass network with the values that give its known voice: a 25k middle pot and smaller bass and
+    // middle caps, so the mids are much less scooped than a blackface and the low end stays tight.
+    inline constexpr ToneStackValues twoRock { 250e3, 250e3, 25e3, 100e3, 250e-12, 47e-9, 22e-9 };
 
     class ToneStack
     {
@@ -70,34 +72,10 @@ namespace amp
     public:
         void prepare (double sampleRate);
         void reset() { env = 0.0f; }
+        void setSag (float amount) { sag = amount; }   // 0.18 for a small 6V6 amp, less for a big, stiff supply
         float process (float v, float drive);   // v in volts from V1B; returns about -1..1
 
     private:
-        float env = 0.0f, attack = 0.0f, release = 0.0f;
-    };
-
-    // Speaker in an open-back 1x12 combo, approximated with filters: little below about 80 Hz, a low resonance,
-    // a presence lift around 2.5 kHz and a steep fall above about 5 kHz. Loading a cabinet impulse response is the
-    // accurate alternative.
-    class Speaker
-    {
-    public:
-        void prepare (double sampleRate, bool twin = false);   // twin: 2x12 open back with brighter, tighter speakers
-        void reset();
-        void process (float* x, int n);
-
-    private:
-        struct Biquad
-        {
-            double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
-            float process (float in)
-            {
-                const double y = b0 * in + z1;
-                z1 = b1 * in - a1 * y + z2;
-                z2 = b2 * in - a2 * y;
-                return (float) y;
-            }
-        };
-        std::array<Biquad, 6> stages;
+        float env = 0.0f, attack = 0.0f, release = 0.0f, sag = 0.18f;
     };
 }
