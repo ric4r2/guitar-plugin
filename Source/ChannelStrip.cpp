@@ -8,6 +8,11 @@ namespace
     float reverbToLinear (float knob) { return std::pow (knob / 10.0f, 1.5f); }
     // the recorded tank IRs are packed with Dwell 5 / Tone 5 at unit energy; this sets them level with the plate
     constexpr float springIRGain = 0.75f;
+    // The first stage works on the guitar at a third of its level and makes it back up afterwards: clean notes keep
+    // their sparkle instead of picking up the extra tones (about 1.2 % on two high strings) that smeared them.
+    constexpr float firstStageIn = 1.0f / 3.0f;
+    // with both amps playing, each comes in at this level (the two are closely related, so they add up louder)
+    constexpr float bothGain = 0.6f;
     // WARMTH pushes the power tubes: 3 is the stock amp, each step is 1.5 dB more (or less) drive into them
     float warmthToDrive (float knob)  { return juce::Decibels::decibelsToGain ((knob - 3.0f) * 1.5f); }
 }
@@ -53,9 +58,7 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     // one with its neighbour, which is about 1.6k each.
     v1a.build (270.0, 100e3, 1.5e3, 12.0);
     v1b.build (270.0, 100e3, 1.64e3, 24.0);
-    powerAmp.prepare (sampleRate * 4.0);
     coupleCoef = (float) (1.0 - std::exp (-juce::MathConstants<double>::twoPi * 12.0 / (sampleRate * 4.0)));
-    coupleState = 0.0f;
     // speaker cabinets start with the built-in ones; recorded ones arrive through postIR()
     {
         const juce::dsp::ProcessSpec stereoSpec { sampleRate, (juce::uint32) maxBlockSize, 2 };
@@ -69,15 +72,30 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
         }
         springConv.prepare ({ sampleRate, (juce::uint32) maxBlockSize, 1 });
         useSpringIR = false;
-        for (auto* b : { &sendBuf, &plateL, &plateR, &springL, &springR })
+        for (auto* b : { &sendBuf, &plateL, &plateR, &springL, &springR, &ampIn, &mixDry, &wetL, &wetR, &masterGain })
             b->assign ((size_t) maxBlockSize, 0.0f);
     }
-    ampModel = -1;
-    applyAmpModel (params.ampType != nullptr && params.ampType->load() > 0.5f ? 1 : 0);
+    for (int k = 0; k < 2; ++k)
+    {
+        auto& a = amps[(size_t) k];
+        a.oversampling.initProcessing ((size_t) maxBlockSize);
+        a.powerAmp.prepare (sampleRate * 4.0);
+        configureAmp (k);
+        for (auto* b : { &a.buffer, &a.mixGain, &a.cabL, &a.cabR })
+            b->assign ((size_t) maxBlockSize, 0.0f);
+        a.volume.reset (sampleRate * 4.0, 0.03);   // these two run at the oversampled rate
+        a.drive.reset (sampleRate * 4.0, 0.03);
+        a.mix.reset (sampleRate, 0.04);
+        a.volume.setCurrentAndTargetValue (volumeTaper (params.gain->load()));
+        a.drive.setCurrentAndTargetValue (a.baseDrive * warmthToDrive (params.warmth->load()));
+        resetAmp (k);
+    }
+    {
+        const int sel = ampSelection();
+        amps[0].mix.setCurrentAndTargetValue (sel == 1 ? 0.0f : sel == 2 ? bothGain : 1.0f);
+        amps[1].mix.setCurrentAndTargetValue (sel == 0 ? 0.0f : sel == 2 ? bothGain : 1.0f);
+    }
     ++prepareCount;
-
-    oversampling.initProcessing ((size_t) maxBlockSize);
-    oversampling.reset();
 
     reverbDuck.prepare (sampleRate);
     spring.prepare (sampleRate);
@@ -86,13 +104,9 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     reverbSmooth.reset (sampleRate, 0.03);
     masterSmooth.reset (sampleRate, 0.03);
     reverbTypeSmooth.reset (sampleRate, 0.05);
-    volumeSmooth.reset (sampleRate * 4.0, 0.03);   // these two run at the oversampled rate
-    driveSmooth.reset (sampleRate * 4.0, 0.03);
     reverbSmooth.setCurrentAndTargetValue (reverbToLinear (params.reverb->load()));
     masterSmooth.setCurrentAndTargetValue (masterToLinear (params.master->load()));
     reverbTypeSmooth.setCurrentAndTargetValue (params.revType->load() > 0.5f ? 1.0f : 0.0f);
-    volumeSmooth.setCurrentAndTargetValue (volumeTaper (params.gain->load()) * preampPad);
-    driveSmooth.setCurrentAndTargetValue (baseDrive * warmthToDrive (params.warmth->load()));
 }
 
 void ChannelStrip::postIR (int target, juce::AudioBuffer<float>&& ir, double irSampleRate)
@@ -131,30 +145,43 @@ bool ChannelStrip::cabinetsReady() const
     return cabinets[0].getCurrentIRSize() > 0 && cabinets[1].getCurrentIRSize() > 0;
 }
 
-void ChannelStrip::applyAmpModel (int model)
+int ChannelStrip::ampSelection() const
 {
-    if (model == ampModel)
-        return;
-    ampModel = model;
-    const bool twoRock = model == 1;
+    return params.ampType == nullptr ? 0 : juce::jlimit (0, 2, (int) std::lround (params.ampType->load()));
+}
 
-    toneStack.prepare (sr * 4.0, twoRock ? amp::twoRock : amp::twinReverb);
-    cabinets[(size_t) model].reset();
+void ChannelStrip::configureAmp (int index)
+{
+    auto& a = amps[(size_t) index];
+    const bool twoRock = index == 1;
+    a.toneStack.prepare (sr * 4.0, twoRock ? amp::twoRock : amp::twinReverb);
 
     // Volts out of V1B that drive the power amp to full power. Both are big clean amps meant for pedals: the 85 W
     // Twin Reverb (four 6L6) and a 50-100 W Two-Rock with a stiff supply.
-    baseDrive = 1.0f / 30.0f;
-    powerAmp.setSag (twoRock ? 0.08f : 0.12f);
+    a.baseDrive = 1.0f / 30.0f;
+    a.powerAmp.setSag (twoRock ? 0.08f : 0.12f);
     // Two-Rock clean channels pad the signal between preamp stages (a resistor divider, often on a gain-structure
     // switch), so the second stage stays clean much longer. The Fender feeds its volume pot straight into V1B.
-    preampPad = twoRock ? 0.4f : 1.0f;
+    a.preampPad = twoRock ? 0.4f : 1.0f;
 
     // Level match: a quiet note with every knob at 5 comes out at about the same level whichever amp is chosen.
-    const double smallSignal = v1a.getSmallSignalGain() * toneStack.analogMagnitude (800.0) * volumeTaper (5.0f) * preampPad
-                             * v1b.getSmallSignalGain() * baseDrive;
-    volumeSmooth.setCurrentAndTargetValue (volumeTaper (params.gain->load()) * preampPad);
-    outputTrim = (float) (0.6 / smallSignal);   // 0.6: the cabinet's presence lift makes it sound louder than the 800 Hz figure
-    driveSmooth.setCurrentAndTargetValue (baseDrive * warmthToDrive (params.warmth->load()));
+    const double smallSignal = v1a.getSmallSignalGain() * a.toneStack.analogMagnitude (800.0) * volumeTaper (5.0f) * a.preampPad
+                             * v1b.getSmallSignalGain() * a.baseDrive;
+    a.outputTrim = (float) (0.6 / smallSignal);   // 0.6: the cabinet's presence lift makes it sound louder than the 800 Hz figure
+
+    // Less bass into the second stage and the power tubes keeps chords from turning to mush: the Two-Rock cuts a bit
+    // higher, as its tighter low end is part of its voice.
+    a.tightG = (float) std::tan (juce::MathConstants<double>::pi * (twoRock ? 100.0 : 75.0) / (sr * 4.0));
+}
+
+void ChannelStrip::resetAmp (int index)
+{
+    auto& a = amps[(size_t) index];
+    a.toneStack.reset();
+    a.powerAmp.reset();
+    a.oversampling.reset();
+    a.coupleState = a.brightS = a.tightS = 0.0f;
+    cabinets[(size_t) index].reset();
 }
 
 void ChannelStrip::reset()
@@ -168,13 +195,10 @@ void ChannelStrip::reset()
     spring.reset();
     plate.reset();
     post.reset();
-    oversampling.reset();
-    toneStack.reset();
-    powerAmp.reset();
-    for (auto& c : cabinets)
-        c.reset();
+    resetAmp (0);
+    resetAmp (1);
     springConv.reset();
-    coupleState = sendHp1 = sendHp2 = 0.0f;
+    sendHp1 = sendHp2 = 0.0f;
 }
 
 void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
@@ -205,40 +229,90 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     });
 
     takeNewIRs();
-    applyAmpModel (params.ampType != nullptr && params.ampType->load() > 0.5f ? 1 : 0);
-    volumeSmooth.setTargetValue (volumeTaper (params.gain->load()) * preampPad);
-    driveSmooth.setTargetValue (baseDrive * warmthToDrive (params.warmth->load()));
+    const int sel = ampSelection();
+    amps[0].mix.setTargetValue (sel == 1 ? 0.0f : sel == 2 ? bothGain : 1.0f);
+    amps[1].mix.setTargetValue (sel == 0 ? 0.0f : sel == 2 ? bothGain : 1.0f);
     reverbSmooth.setTargetValue (reverbToLinear (params.reverb->load()));
     masterSmooth.setTargetValue (masterToLinear (params.master->load()));
     reverbTypeSmooth.setTargetValue (params.revType->load() > 0.5f ? 1.0f : 0.0f);
-    toneStack.setControls (params.treble->load() / 10.0f, params.mid->load() / 10.0f, params.bass->load() / 10.0f);
 
-    // The amp, at 4x oversampling so the tube harmonics don't alias into fizz:
-    // V1A -> tone stack -> volume pot -> V1B -> coupling cap -> phase inverter and power tubes.
-    fx::processOversampled (oversampling, outL, n, maxBlock, [&] (float* d, size_t count)
-    {
-        for (size_t i = 0; i < count; ++i)
-        {
-            float v = v1a.process (d[i]);
-            v = toneStack.process (v);
-            v = v1b.process (v * volumeSmooth.getNextValue());
-            coupleState += coupleCoef * (v - coupleState);
-            v -= coupleState;
-            // WARMTH works the power tubes harder without making clean notes much louder
-            const float drive = driveSmooth.getNextValue();
-            d[i] = powerAmp.process (v, drive) * outputTrim * std::pow (baseDrive / drive, 0.75f);
-        }
-    });
-
-    if ((int) sendBuf.size() < n)
-        for (auto* b : { &sendBuf, &plateL, &plateR, &springL, &springR })
+    for (auto* b : { &sendBuf, &plateL, &plateR, &springL, &springR, &ampIn, &mixDry, &wetL, &wetR, &masterGain })
+        if ((int) b->size() < n)
             b->resize ((size_t) n);
+    std::copy (outL, outL + n, ampIn.begin());
+    std::fill (mixDry.begin(), mixDry.begin() + n, 0.0f);
+
+    // The amps, at 4x oversampling so the tube harmonics don't alias into fizz:
+    // V1A -> tone stack -> volume pot -> V1B -> coupling cap -> phase inverter and power tubes.
+    for (int k = 0; k < 2; ++k)
+    {
+        auto& a = amps[(size_t) k];
+        const bool active = a.mix.getTargetValue() > 0.0f || a.mix.getCurrentValue() > 0.0f;
+        if (! active)
+        {
+            a.running = false;
+            continue;
+        }
+        if (! a.running)   // switched on: start from silence, not from where it stopped
+        {
+            resetAmp (k);
+            a.running = true;
+        }
+        for (auto* b : { &a.buffer, &a.mixGain, &a.cabL, &a.cabR })
+            if ((int) b->size() < n)
+                b->resize ((size_t) n);
+
+        const float taper = volumeTaper (params.gain->load());
+        a.volume.setTargetValue (taper);
+        {
+            // AB763 bright cap: 47pF across the 1M volume pot. Treble skips the part of the pot above the wiper, so the
+            // lower the volume, the more sparkle: H = t + (1 - t) * highpass, with time constant t (1 - t) * 1M * 47pF.
+            const double tau = juce::jmax (1.0e-12, (double) taper * (1.0 - taper) * 1.0e6 * 47.0e-12);
+            const double fc = juce::jmin (0.45 * sr * 4.0, 1.0 / (juce::MathConstants<double>::twoPi * tau));
+            a.brightG = (float) std::tan (juce::MathConstants<double>::pi * fc / (sr * 4.0));
+        }
+        a.drive.setTargetValue (a.baseDrive * warmthToDrive (params.warmth->load()));
+        a.toneStack.setControls (params.treble->load() / 10.0f, params.mid->load() / 10.0f, params.bass->load() / 10.0f);
+
+        std::copy (ampIn.begin(), ampIn.begin() + n, a.buffer.begin());
+        fx::processOversampled (a.oversampling, a.buffer.data(), n, maxBlock, [&] (float* d, size_t count)
+        {
+            for (size_t i = 0; i < count; ++i)
+            {
+                float v = v1a.process (d[i] * firstStageIn) / firstStageIn;
+                v = a.toneStack.process (v);
+
+                const float t = a.volume.getNextValue();
+                const float bw = (v - a.brightS) * a.brightG / (1.0f + a.brightG);
+                const float blp = bw + a.brightS;
+                a.brightS = blp + bw;
+                v = (t * v + (1.0f - t) * (v - blp)) * a.preampPad;   // volume pot with its bright cap
+
+                const float tw = (v - a.tightS) * a.tightG / (1.0f + a.tightG);
+                const float tlp = tw + a.tightS;
+                a.tightS = tlp + tw;
+                v = v1b.process (v - tlp);
+                a.coupleState += coupleCoef * (v - a.coupleState);
+                v -= a.coupleState;
+                // WARMTH works the power tubes harder without making clean notes much louder
+                const float drive = a.drive.getNextValue();
+                d[i] = a.powerAmp.process (v, drive) * a.outputTrim * std::pow (a.baseDrive / drive, 0.75f);
+            }
+        });
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float g = a.mix.getNextValue();
+            a.mixGain[(size_t) i] = g;
+            mixDry[(size_t) i] += g * a.buffer[(size_t) i];
+        }
+    }
 
     for (int i = 0; i < n; ++i)
     {
         // like the real amp's reverb driver, the tank gets a thin signal (no low-mids, so the wash doesn't muddy the
         // tone), minus the pick attack
-        const float dry = outL[i];
+        const float dry = mixDry[(size_t) i];
         sendHp1 += sendHpCoef * (dry - sendHp1);
         const float s1 = dry - sendHp1;
         sendHp2 += sendHpCoef * (s1 - sendHp2);
@@ -262,22 +336,35 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
 
     for (int i = 0; i < n; ++i)
     {
-        const float dry = outL[i];
         const float wet = reverbSmooth.getNextValue();
-        const float master = masterSmooth.getNextValue();
         const float type = reverbTypeSmooth.getNextValue();
-        const float wl = plateL[(size_t) i] + type * (springL[(size_t) i] - plateL[(size_t) i]);   // type 0 = plate, 1 = spring
-        const float wr = plateR[(size_t) i] + type * (springR[(size_t) i] - plateR[(size_t) i]);
-        outL[i] = (dry + wet * wl) * master;
-        outR[i] = (dry + wet * wr) * master;
+        wetL[(size_t) i] = wet * (plateL[(size_t) i] + type * (springL[(size_t) i] - plateL[(size_t) i]));   // type 0 = plate, 1 = spring
+        wetR[(size_t) i] = wet * (plateR[(size_t) i] + type * (springR[(size_t) i] - plateR[(size_t) i]));
+        masterGain[(size_t) i] = masterSmooth.getNextValue();
     }
 
-    // everything, reverb included, comes out of the speaker cabinet
+    // each amp, reverb included, comes out of its own speaker cabinet; with both on, the two cabinets are mixed
+    std::fill (outL, outL + n, 0.0f);
+    std::fill (outR, outR + n, 0.0f);
+    for (int k = 0; k < 2; ++k)
     {
-        float* chans[2] = { outL, outR };
+        auto& a = amps[(size_t) k];
+        if (! a.running)
+            continue;
+        for (int i = 0; i < n; ++i)
+        {
+            const float g = a.mixGain[(size_t) i] * masterGain[(size_t) i];
+            a.cabL[(size_t) i] = g * (a.buffer[(size_t) i] + wetL[(size_t) i]);
+            a.cabR[(size_t) i] = g * (a.buffer[(size_t) i] + wetR[(size_t) i]);
+        }
+        float* chans[2] = { a.cabL.data(), a.cabR.data() };
         juce::dsp::AudioBlock<float> block (chans, 2, (size_t) n);
-        juce::dsp::ProcessContextReplacing<float> ctx (block);
-        cabinets[(size_t) ampModel].process (ctx);
+        cabinets[(size_t) k].process (juce::dsp::ProcessContextReplacing<float> (block));
+        for (int i = 0; i < n; ++i)
+        {
+            outL[i] += a.cabL[(size_t) i];
+            outR[i] += a.cabR[(size_t) i];
+        }
     }
 
     // equalizer, then the effects after it

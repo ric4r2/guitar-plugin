@@ -678,6 +678,31 @@ namespace
         return 100.0 * std::sqrt (h) / std::max (1.0e-12, fundamental);
     }
 
+    // two high strings played together (B and high E, 0.15 V each): how loud are the extra tones the amp invents?
+    // Difference (83 Hz) and sum (577 Hz) tones are what smear clean high notes.
+    double imdOfStrip (int model, float volume)
+    {
+        StripFixture f;
+        f.ampType = (float) model;
+        f.gain = volume;
+        f.reverb = 0.0f;
+        std::vector<float> in ((size_t) sr);
+        for (size_t i = 0; i < in.size(); ++i)
+            in[i] = 0.15f * (float) (std::sin (6.283185307179586 * 246.94 * (double) i / sr) + std::sin (6.283185307179586 * 329.63 * (double) i / sr));
+        ChannelStrip strip;
+        strip.setParams (f.params());
+        strip.prepare (sr, 256);
+        waitForCabinets (strip, 256);
+        std::vector<float> l (in.size()), r (in.size());
+        for (size_t s = 0; s < in.size(); s += 256)
+            strip.process (in.data() + s, l.data() + s, r.data() + s, (int) std::min<size_t> (256, in.size() - s));
+        const double tones = bin (l, 24000, 48000, 246.94) + bin (l, 24000, 48000, 329.63);
+        double extra = 0.0;
+        for (double fq : { 329.63 - 246.94, 329.63 + 246.94, 2 * 246.94 - 329.63, 2 * 329.63 - 246.94 })
+            extra += std::pow (bin (l, 24000, 48000, fq), 2.0);
+        return 100.0 * std::sqrt (extra) / std::max (1.0e-12, tones);
+    }
+
     void testAmp()
     {
         // 12AX7 stage with the AB763 values: published operating points are about 160-190 V on the plate and a gain of 30-60
@@ -730,6 +755,9 @@ namespace
             twoRock[v] = thdOfStrip (1, (float) v, 0.25f);
             std::printf ("        volume %2d   Fender %6.2f   Two-Rock %6.2f\n", v, deluxe[v], twoRock[v]);
         }
+        std::printf ("      intermodulation (%%) of two high strings by volume:\n");
+        for (int v : { 3, 5, 7 })
+            std::printf ("        volume %d   Fender %6.2f   Two-Rock %6.2f   Both %6.2f\n", v, imdOfStrip (0, (float) v), imdOfStrip (1, (float) v), imdOfStrip (2, (float) v));
         std::snprintf (buf, sizeof buf, "Fender %.1f%% at 3, %.1f%% at 10", deluxe[3], deluxe[10]);
         check ("amp: Fender is clean low and breaks up high", deluxe[3] < 2.0 && deluxe[10] > 8.0, buf);
         std::snprintf (buf, sizeof buf, "volume 6: Fender %.1f%%, Two-Rock %.1f%%", deluxe[6], twoRock[6]);

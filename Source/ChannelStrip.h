@@ -55,7 +55,7 @@ public:
         const std::atomic<float>* reverb = nullptr;
         const std::atomic<float>* master = nullptr;
         const std::atomic<float>* revType = nullptr;   // 0 = plate, 1 = spring
-        const std::atomic<float>* ampType = nullptr;   // 0 = Fender Twin Reverb, 1 = Two-Rock
+        const std::atomic<float>* ampType = nullptr;   // 0 = Fender Twin Reverb, 1 = Two-Rock, 2 = both side by side
 
         // pedals before the amp
         const std::atomic<float>* wahOn = nullptr;
@@ -109,7 +109,7 @@ public:
     bool cabinetsReady() const;
     void prepare (double sampleRate, int maxBlockSize);
     void reset();
-    int getLatencySamples() const { return (int) oversampling.getLatencyInSamples(); }
+    int getLatencySamples() const { return (int) amps[0].oversampling.getLatencyInSamples(); }
 
     // `in` may alias `outL`. Writes the finished stereo signal to outL and outR (n samples each).
     void process (const float* in, float* outL, float* outR, int n);
@@ -132,10 +132,25 @@ private:
     std::vector<float> dryScratch;
 
     // the amp, modelled on its circuit (see AmpModel.h): all of it runs at 4x the sample rate except the speaker
-    void applyAmpModel (int model);
+    // Two complete amps, each with its own cabinet: 0 the Fender (Twin Reverb), 1 the Two-Rock. The selector plays
+    // one of them or both side by side (a dual-amp rig); an amp that is switched off doesn't run.
+    struct AmpCore
+    {
+        amp::ToneStack toneStack;
+        amp::PowerAmp powerAmp;
+        juce::dsp::Oversampling<float> oversampling { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };   // 4x
+        juce::SmoothedValue<float> volume, drive, mix;
+        float baseDrive = 1.0f / 30.0f, outputTrim = 1.0f, preampPad = 1.0f, coupleState = 0.0f;
+        float brightG = 0.0f, brightS = 0.0f;   // 47pF bright cap across the volume pot
+        float tightG = 0.0f, tightS = 0.0f;     // low cut in front of the second stage
+        std::vector<float> buffer, mixGain, cabL, cabR;
+        bool running = false;
+    };
+    std::array<AmpCore, 2> amps;
+    void configureAmp (int index);
+    void resetAmp (int index);
+    int ampSelection() const;   // 0 Fender, 1 Two-Rock, 2 both
     amp::TriodeStage v1a, v1b;
-    amp::ToneStack toneStack;
-    amp::PowerAmp powerAmp;
     std::array<juce::dsp::Convolution, 2> cabinets;            // Fender and Two-Rock speaker cabinets
     juce::dsp::Convolution springConv { juce::dsp::Convolution::NonUniform { 512 } };   // recorded spring tank
     bool useSpringIR = false;
@@ -144,17 +159,14 @@ private:
     std::atomic<int> prepareCount { 0 };
     void takeNewIRs();
     std::vector<float> sendBuf, plateL, plateR, springL, springR;
-    int ampModel = -1;
-    float baseDrive = 0.125f, outputTrim = 1.0f, preampPad = 1.0f;
-    float coupleState = 0.0f, coupleCoef = 0.0f;               // coupling capacitor after V1B
+    float coupleCoef = 0.0f;                                   // coupling capacitor after V1B
     float sendHp1 = 0.0f, sendHp2 = 0.0f, sendHpCoef = 0.0f;   // keeps low-mids out of the reverb
-
-    juce::dsp::Oversampling<float> oversampling { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };   // 4x
 
     fx::ReverbDuck reverbDuck;
     SpringReverb spring;
     PlateReverb plate;
-    juce::SmoothedValue<float> volumeSmooth, driveSmooth, reverbSmooth, masterSmooth, reverbTypeSmooth;
+    juce::SmoothedValue<float> reverbSmooth, masterSmooth, reverbTypeSmooth;
+    std::vector<float> ampIn, mixDry, wetL, wetR, masterGain;
 
     fx::GraphicEq eq;
     fx::PedalSwitch eqSwitch;

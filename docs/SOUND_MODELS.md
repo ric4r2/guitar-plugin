@@ -5,7 +5,15 @@ real circuits, what is still an approximation, and where every number comes from
 
 ## Amps: Fender or Two-Rock
 
-Pick the amp with the **FENDER / TWO-ROCK** switch under the input jack. Each amp has its own speaker cabinet.
+Pick the amp with the three-way **AMP** selector (like a guitar's pickup switch): **FENDER**, **BOTH** or
+**TWO-ROCK**. Each amp has its own speaker cabinet. BOTH runs the two complete amps side by side (a dual-amp rig) and
+mixes their cabinets. An amp that is switched off doesn't run.
+
+Clean clarity:
+
+* **First stage:** it works on a third of the guitar level and makes the level back up afterwards. Two high strings played together now pick up 0.4 % of extra tones at volume 3 (it was about 1.2 %, which smeared them). One note's distortion at volume 3 went from 0.6 % to 0.1 %.
+* **Bright cap:** the AB763's 47pF bright cap across the volume pot. The lower the volume, the more sparkle.
+* **Low cut:** a low cut in front of the second stage (75 Hz on the Fender, 100 Hz on the Two-Rock) keeps chords from getting woolly when the amp works hard.
 
 | Stage | Fender (AB763 Twin Reverb) | Two-Rock (clean channel) | How it is modelled |
 |---|---|---|---|

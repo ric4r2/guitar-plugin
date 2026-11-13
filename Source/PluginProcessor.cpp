@@ -80,7 +80,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
         p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { paramId (strip, revTypeId), 1 }, prefix + "Reverb Type",
                                                              StringArray { "Plate", "Spring" }, 0));
         p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { paramId (strip, ampTypeId), 1 }, prefix + "Amp Model",
-                                                             StringArray { "Fender", "Two-Rock" }, 0));
+                                                             StringArray { "Fender", "Two-Rock", "Both" }, 0));
 
         // pedals before the amp, and the effects after the equalizer
         addSwitch (p, paramId (strip, Params::wahOn), prefix + "Wah On", false);

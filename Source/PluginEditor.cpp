@@ -322,19 +322,17 @@ AmpView::AmpView (GuitarDriveProcessor& p, const juce::Image& logoImage)
         strip.revType.onClick = [this, s] { revAttach[(size_t) s]->setValueAsCompleteGesture (strips[(size_t) s].revState != 0 ? 0.0f : 1.0f); };
 
         // amp model: Fender (AB763 Deluxe Reverb, breaks up early) or Two-Rock (big, stiff, clean)
-        styleAmpButton (strip.ampType);
-        strip.ampType.setTooltip ("FENDER: Deluxe Reverb with its 1x12 cabinet, breaks up around volume 5. TWO-ROCK: big clean amp with its 2x12 cabinet, stays clean much louder.");
+        strip.ampType.setTooltip ("Amp selector. FENDER: Twin Reverb and its cabinet. TWO-ROCK: Two-Rock and its 2x12. BOTH: the two amps side by side.");
         addAndMakeVisible (strip.ampType);
         ampAttach[(size_t) s] = std::make_unique<juce::ParameterAttachment> (
             *apvts.getParameter (GuitarDriveProcessor::paramId (s, GuitarDriveProcessor::ampTypeId)),
             [this, s] (float v)
             {
                 auto& st = strips[(size_t) s];
-                st.ampState = v > 0.5f ? 1 : 0;
-                st.ampType.setButtonText (st.ampState != 0 ? "TWO-ROCK" : "FENDER");
-                st.ampType.setToggleState (st.ampState != 0, juce::dontSendNotification);
+                const int value = juce::jlimit (0, 2, (int) std::lround (v));   // 0 Fender, 1 Two-Rock, 2 both
+                st.ampType.setPosition (value == 0 ? 0 : value == 2 ? 1 : 2);
             });
-        strip.ampType.onClick = [this, s] { ampAttach[(size_t) s]->setValueAsCompleteGesture (strips[(size_t) s].ampState != 0 ? 0.0f : 1.0f); };
+        strip.ampType.onChange = [this, s] (int pos) { ampAttach[(size_t) s]->setValueAsCompleteGesture (pos == 0 ? 0.0f : pos == 1 ? 2.0f : 1.0f); };
     }
 
     for (auto& a : revAttach)
@@ -376,7 +374,7 @@ void AmpView::layoutAmp (int index, juce::Rectangle<int> area)
     l.grille = grilleHeight >= 30 ? juce::Rectangle<int> (l.cabinet.getX() + 38, grilleTop, l.cabinet.getWidth() - 76, grilleHeight)
                                   : juce::Rectangle<int>();
 
-    constexpr int col = 86, space = 6;
+    constexpr int col = 84, space = 6;
     auto row = l.panel.reduced (8, 8);
     l.groups.clear();
 
@@ -395,8 +393,9 @@ void AmpView::layoutAmp (int index, juce::Rectangle<int> area)
         return group;   // whatever is left of the group
     };
 
-    l.jack = take (stereo ? (index == 0 ? "LEFT" : "RIGHT") : "INPUT", 84);
-    strip.ampType.setBounds (l.jack.removeFromBottom (38).withSizeKeepingCentre (76, 26));
+    auto selector = take (stereo ? (index == 0 ? "AMP (LEFT)" : "AMP (RIGHT)") : "AMP", 104);
+    selector.removeFromTop (16);
+    strip.ampType.setBounds (selector.reduced (6, 8));
     placeKnobs (take ("PREAMP", 4 * col), { 0, 1, 2, 3 });
     placeKnobs (take ("TONE", 3 * col), { 4, 5, 6 });
     placeKnobs (take ("CABINET", col), { 9 });
@@ -495,18 +494,6 @@ void AmpView::paintAmp (juce::Graphics& g, int index)
             g.drawText (group.title, tag.translated (0.0f, 1.0f).toNearestInt(), juce::Justification::centred);
         }
     }
-
-    // input jack
-    const auto jack = l.jack.toFloat().getCentre().translated (0.0f, 4.0f);
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff2f3f5), jack.x - 7.0f, jack.y - 9.0f,
-                                             juce::Colour (0xff6d7077), jack.x + 9.0f, jack.y + 11.0f, true));
-    g.fillEllipse (jack.x - 19.0f, jack.y - 19.0f, 38.0f, 38.0f);
-    juce::Path nut;
-    nut.addPolygon (jack, 6, 14.0f, 0.3f);
-    g.setColour (juce::Colour (0xff8c9097));
-    g.fillPath (nut);
-    g.setColour (juce::Colour (0xff09090a));
-    g.fillEllipse (jack.x - 8.0f, jack.y - 8.0f, 16.0f, 16.0f);
 
     // logo, and the pilot jewel beside it
     const auto badge = l.badge.toFloat();
@@ -1333,7 +1320,10 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
     root.addAndMakeVisible (outputMeter);
 
     stereoSwitch.onClick = [this] { stereoAttach.setValueAsCompleteGesture (stereoMode ? 0.0f : 1.0f); };
-    root.addAndMakeVisible (stereoSwitch);
+    root.addChildComponent (stereoSwitch);
+    stereoAvailable = settingsFile().getBoolValue ("showStereoMode", false);
+    settingsButton.setTooltip ("Settings");
+    settingsButton.onClick = [this] { showSettingsMenu(); };
 
     // pan, solo and mute for both channels sit in the top bar while in stereo mode
     for (int ch = 0; ch < 2; ++ch)
@@ -1377,6 +1367,7 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
     root.addAndMakeVisible (footer);
     root.addAndMakeVisible (presetBar);
     root.addAndMakeVisible (tunerView);
+    root.addAndMakeVisible (settingsButton);   // last, so it sits on top of the footer
 
     footer.tunerButton.onClick = [this] { setTunerOpen (footer.tunerButton.getToggleState()); };
 
@@ -1505,6 +1496,7 @@ void GuitarDriveEditor::updateVisibility()
     ampView.setVisible (normal && view == View::amp);
     tunerView.setVisible (tunerOpen);
     rightInButton.setVisible (stereoMode);
+    stereoSwitch.setVisible (stereoAvailable || stereoMode);   // still shown while stereo is on, so it can be switched off
 }
 
 void GuitarDriveEditor::resized()
@@ -1540,6 +1532,7 @@ void GuitarDriveEditor::layout()
     inputMeter.setBounds (36, 78, 8, 128);
     inputKnob.place ({ 70, 72, 120, 140 });
     stereoSwitch.setBounds (250, 86, 130, 58);
+    settingsButton.setBounds (designW - 196, designH - footerH + 16, 30, 30);
     rightInButton.setBounds (238, 194, 150, 20);
     presetBar.setBounds ((w - 420) / 2, 70, 420, 130);
 
@@ -1623,7 +1616,8 @@ void GuitarDriveEditor::paintRoot (juce::Graphics& g)
 
     g.setColour (Palette::text);
     g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-    g.drawText ("INPUT MODE", juce::Rectangle<int> (238, 170, 150, 22), juce::Justification::centred);
+    if (stereoAvailable)
+        g.drawText ("INPUT MODE", juce::Rectangle<int> (238, 170, 150, 22), juce::Justification::centred);
     if (stereoMode)
         g.drawText ("CHANNELS", juce::Rectangle<int> (925, 170, 240, 22), juce::Justification::centred);
 
@@ -1638,4 +1632,37 @@ void GuitarDriveEditor::paintRoot (juce::Graphics& g)
         for (int ch = 0; ch < 2; ++ch)
             g.drawText (ch == 0 ? "LEFT" : "RIGHT", channelRect (ch).withWidth (sideTagW + 16), juce::Justification::centred);
     }
+}
+
+// ---------------------------------------------------------------- settings
+
+juce::PropertiesFile& GuitarDriveEditor::settingsFile()
+{
+    static juce::PropertiesFile file ([]
+    {
+        juce::PropertiesFile::Options o;
+        o.applicationName = "settings";
+        o.folderName = "Joe Garcia Rig";
+        o.filenameSuffix = ".xml";
+        o.osxLibrarySubFolder = "Application Support";
+        return o;
+    }());
+    return file;
+}
+
+void GuitarDriveEditor::showSettingsMenu()
+{
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Settings");
+    menu.addItem ("Show stereo mode (two guitars / two channels)", true, stereoAvailable, [this]
+    {
+        stereoAvailable = ! stereoAvailable;
+        settingsFile().setValue ("showStereoMode", stereoAvailable);
+        settingsFile().saveIfNeeded();
+        if (! stereoAvailable && stereoMode)
+            stereoAttach.setValueAsCompleteGesture (0.0f);   // hiding it also goes back to mono
+        updateVisibility();
+        root.repaint();
+    });
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (settingsButton));
 }

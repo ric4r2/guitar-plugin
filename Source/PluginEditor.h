@@ -134,8 +134,7 @@ private:
         std::array<KnobUI, numKnobs> knobs;
         juce::TextButton revType { "PLATE" };
         int revState = 0;
-        juce::TextButton ampType { "FENDER" };
-        int ampState = 0;
+        SelectorSwitch ampType { { "FENDER", "BOTH", "TWO-ROCK" } };   // switch positions; parameter values 0, 2, 1
     };
 
     struct Group { juce::String title; juce::Rectangle<int> area; };
@@ -379,6 +378,10 @@ private:
     HeaderKnob inputKnob, outputKnob;
     LevelMeter inputMeter, outputMeter;
     PillSwitch stereoSwitch { "STEREO", "MONO" };
+    IconButton settingsButton { Icon::gear };
+    bool stereoAvailable = false;   // the stereo switch only shows when turned on in settings
+    void showSettingsMenu();
+    static juce::PropertiesFile& settingsFile();
     std::array<ChannelControls, 2> channels;
     juce::TextButton rightInButton { "RIGHT = INPUT 1" };
     AmpView ampView;

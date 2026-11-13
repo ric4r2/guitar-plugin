@@ -3,7 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "VintageLook.h"
 
-enum class Icon { wah, pedals, amp, eq, post, tuner, save, trash, plus, prev, next };
+enum class Icon { wah, pedals, amp, eq, post, tuner, save, trash, plus, prev, next, gear };
 
 // Flat line-icon button with an optional small caption underneath. Lit amber while toggled on.
 class IconButton : public juce::Button
@@ -106,6 +106,18 @@ private:
                 p.startNewSubPath (0.5f, 0.12f); p.lineTo (0.5f, 0.88f);
                 p.startNewSubPath (0.12f, 0.5f); p.lineTo (0.88f, 0.5f);
                 break;
+            case Icon::gear:
+            {
+                for (int i = 0; i < 8; ++i)   // eight teeth around a ring
+                {
+                    const float a = juce::MathConstants<float>::twoPi * (float) i / 8.0f;
+                    p.startNewSubPath (0.5f + 0.30f * std::sin (a), 0.5f - 0.30f * std::cos (a));
+                    p.lineTo (0.5f + 0.44f * std::sin (a), 0.5f - 0.44f * std::cos (a));
+                }
+                p.addEllipse (0.2f, 0.2f, 0.6f, 0.6f);
+                p.addEllipse (0.38f, 0.38f, 0.24f, 0.24f);
+                break;
+            }
             case Icon::prev:
                 p.startNewSubPath (0.65f, 0.1f); p.lineTo (0.3f, 0.5f); p.lineTo (0.65f, 0.9f);
                 break;
@@ -267,4 +279,94 @@ private:
 
     std::atomic<float>& source;
     float level = 0.0f;
+};
+
+// Three-way selector like a guitar's pickup switch: a chrome lever in a black plate, pointing left, up or right.
+// Position 0 is the left label, 1 the middle, 2 the right. Click a side, drag the lever or turn the mouse wheel.
+class SelectorSwitch : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    SelectorSwitch (juce::StringArray positionNames) : names (std::move (positionNames)) {}
+
+    std::function<void (int)> onChange;
+    int getPosition() const { return position; }
+    void setPosition (int p) { position = juce::jlimit (0, 2, p); repaint(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        const auto label = r.removeFromBottom (15.0f);
+        const float rad = juce::jmin (r.getWidth() * 0.5f - 2.0f, r.getHeight() - 8.0f);
+        const juce::Point<float> pivot (r.getCentreX(), r.getBottom() - 4.0f);
+
+        // black plate with a cream rim, three amber lamps for the positions
+        juce::Path half;
+        half.addCentredArc (pivot.x, pivot.y, rad, rad, 0.0f,
+                            -juce::MathConstants<float>::halfPi, juce::MathConstants<float>::halfPi, true);
+        half.closeSubPath();
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.fillPath (half, juce::AffineTransform::translation (0.0f, 2.0f));
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2a2a2c), pivot.x, pivot.y - rad, juce::Colour (0xff0b0b0c), pivot.x, pivot.y, false));
+        g.fillPath (half);
+        g.setColour (Palette::cream.withAlpha (0.75f));
+        g.strokePath (half, juce::PathStrokeType (1.2f));
+
+        const float reach = rad - 8.0f;
+        for (int i = 0; i < 3; ++i)
+        {
+            const float a = angleFor (i);
+            const auto dot = pivot + juce::Point<float> (std::sin (a), -std::cos (a)) * (reach + 1.0f);
+            const bool lit = i == position;
+            if (lit)
+            {
+                g.setGradientFill (juce::ColourGradient (Palette::amber.withAlpha (0.6f), dot.x, dot.y, Palette::amber.withAlpha (0.0f), dot.x + 8.0f, dot.y, true));
+                g.fillEllipse (dot.x - 8.0f, dot.y - 8.0f, 16.0f, 16.0f);
+            }
+            g.setColour (lit ? Palette::amber : Palette::amber.withAlpha (0.25f));
+            g.fillEllipse (dot.x - 2.6f, dot.y - 2.6f, 5.2f, 5.2f);
+        }
+
+        // the lever: chrome shaft with a cream tip, casting a shadow
+        const float a = angleFor (position);
+        const auto dir = juce::Point<float> (std::sin (a), -std::cos (a));
+        const auto tip = pivot + dir * (reach - 7.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.4f));
+        g.drawLine ({ pivot.translated (2.0f, 2.0f), tip.translated (2.0f, 2.0f) }, 4.0f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff2f3f5), pivot.x - 2.0f, pivot.y, juce::Colour (0xff7d8189), pivot.x + 3.0f, pivot.y, false));
+        g.drawLine ({ pivot, tip }, 4.0f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfffff6dc), tip.x - 3.0f, tip.y - 3.0f, juce::Colour (0xffb9a676), tip.x + 4.0f, tip.y + 4.0f, true));
+        g.fillEllipse (tip.x - 6.0f, tip.y - 6.0f, 12.0f, 12.0f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xffe5e6e8), pivot.x - 3.0f, pivot.y - 3.0f, juce::Colour (0xff55585e), pivot.x + 4.0f, pivot.y + 4.0f, true));
+        g.fillEllipse (pivot.x - 5.0f, pivot.y - 5.0f, 10.0f, 10.0f);   // pivot nut
+
+        g.setColour (Palette::cream);
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (names[position], label.toNearestInt(), juce::Justification::centred);
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override { choose (positionAt (e.position.x)); }
+    void mouseDrag (const juce::MouseEvent& e) override { choose (positionAt (e.position.x)); }
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
+    {
+        const float d = (w.isReversed ? -1.0f : 1.0f) * w.deltaY;
+        if (d != 0.0f)
+            choose (position + (d > 0.0f ? 1 : -1));
+    }
+
+private:
+    static float angleFor (int p) { return juce::degreesToRadians (-40.0f + 40.0f * (float) p); }
+    int positionAt (float x) const { return juce::jlimit (0, 2, (int) (3.0f * x / (float) juce::jmax (1, getWidth()))); }
+
+    void choose (int p)
+    {
+        p = juce::jlimit (0, 2, p);
+        if (p == position)
+            return;
+        setPosition (p);
+        if (onChange)
+            onChange (p);
+    }
+
+    juce::StringArray names;
+    int position = 0;
 };
