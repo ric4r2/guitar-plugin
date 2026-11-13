@@ -45,3 +45,8 @@ build/GuitarDriveTests_artefacts/Release/GuitarDriveTests.exe
 - `Source/` the plugin: `ChannelStrip` (per-channel signal chain), `Effects`, `PlateReverb`, `SpringReverb`, `Presets`, the editor and widgets
 - `Tests/` the DSP tests
 - `Assets/` the logo (embedded in the program)
+
+## License
+
+GNU Affero General Public License v3.0. See [LICENSE](LICENSE). JUCE is used under the same license, which is why this project is AGPL-3.0: if you share a compiled copy, the source has to stay available (it is in this repository).
+
