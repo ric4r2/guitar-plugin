@@ -2,18 +2,46 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 #include "Effects.h"
+#include "Params.h"
 #include "PlateReverb.h"
 #include "SpringReverb.h"
 
-// One complete guitar signal path:
-// gate -> transposer -> wah -> compressor -> tube screamer -> overdrive -> gain -> tube warmth -> bass/mid/treble -> reverb -> master.
-// Mono mode uses one strip; stereo mode runs two, one per input channel.
+// One complete guitar signal path, one per channel:
+// gate -> transposer -> wah -> compressor -> tube screamer -> overdrive -> gain -> tube warmth -> bass/mid/treble
+//      -> reverb -> master -> equalizer -> phaser -> chorus -> tremolo -> delay -> digital reverb.
+// Mono mode uses one strip; stereo mode runs two, one per input channel, each with its own settings.
 class ChannelStrip
 {
 public:
+    // pointers to the effects after the equalizer
+    struct PostPtrs
+    {
+        const std::atomic<float>* phOn = nullptr;
+        const std::atomic<float>* phRate = nullptr;
+        const std::atomic<float>* phDepth = nullptr;
+        const std::atomic<float>* phFb = nullptr;
+        const std::atomic<float>* phMix = nullptr;
+        const std::atomic<float>* chOn = nullptr;
+        const std::atomic<float>* chRate = nullptr;
+        const std::atomic<float>* chDepth = nullptr;
+        const std::atomic<float>* chMix = nullptr;
+        const std::atomic<float>* trOn = nullptr;
+        const std::atomic<float>* trRate = nullptr;
+        const std::atomic<float>* trDepth = nullptr;
+        const std::atomic<float>* dlOn = nullptr;
+        const std::atomic<float>* dlTime = nullptr;
+        const std::atomic<float>* dlFb = nullptr;
+        const std::atomic<float>* dlTone = nullptr;
+        const std::atomic<float>* dlMix = nullptr;
+        const std::atomic<float>* rvOn = nullptr;
+        const std::atomic<float>* rvSize = nullptr;
+        const std::atomic<float>* rvDamp = nullptr;
+        const std::atomic<float>* rvMix = nullptr;
+    };
+
     struct Params
     {
-        // knobs of this channel
+        // amp knobs
         const std::atomic<float>* gate = nullptr;
         const std::atomic<float>* trans = nullptr;
         const std::atomic<float>* gain = nullptr;
@@ -25,7 +53,7 @@ public:
         const std::atomic<float>* master = nullptr;
         const std::atomic<float>* revType = nullptr;   // 0 = plate, 1 = spring
 
-        // pedals, shared by both channels
+        // pedals before the amp
         const std::atomic<float>* wahOn = nullptr;
         const std::atomic<float>* wahAuto = nullptr;
         const std::atomic<float>* wahPos = nullptr;
@@ -43,6 +71,11 @@ public:
         const std::atomic<float>* odDrive = nullptr;
         const std::atomic<float>* odTone = nullptr;
         const std::atomic<float>* odLevel = nullptr;
+
+        // equalizer and the effects after it
+        const std::atomic<float>* eqOn = nullptr;
+        std::array<const std::atomic<float>*, ::Params::numEqBands> eq {};
+        PostPtrs post;
     };
 
     void setParams (const Params& p) { params = p; }
@@ -50,7 +83,7 @@ public:
     void reset();
     int getLatencySamples() const { return (int) oversampling.getLatencyInSamples(); }
 
-    // `in` may alias `outL`. Writes dry plus reverb to outL and outR (n samples each).
+    // `in` may alias `outL`. Writes the finished stereo signal to outL and outR (n samples each).
     void process (const float* in, float* outL, float* outR, int n);
 
 private:
@@ -82,6 +115,11 @@ private:
     SpringReverb spring;
     PlateReverb plate;
     juce::SmoothedValue<float> gainSmooth, warmthSmooth, reverbSmooth, masterSmooth, reverbTypeSmooth;
+
+    fx::GraphicEq eq;
+    fx::PedalSwitch eqSwitch;
+    fx::PostFx post;
+    std::vector<float> eqDryL, eqDryR;
 
     float dcState = 0.0f, dcCoef = 0.0f, toneState = 0.0f;
 };

@@ -1,42 +1,52 @@
 #pragma once
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <vector>
 
-// Click track. One pulse is one note of the time signature's denominator (an eighth note in 6/8),
-// and the BPM is the number of pulses per minute.
+// Click track for any time signature typed in as beats per bar over a note value (2, 4, 8 or 16).
+// One pulse is one note of that value, and the BPM is the number of pulses per minute.
 class Metronome
 {
 public:
-    static constexpr int numSigs = 8;
+    static constexpr int minBeats = 1, maxBeats = 16, numNoteValues = 4;
 
-    static int clampSig (int i) { return i < 0 ? 0 : (i >= numSigs ? numSigs - 1 : i); }
+    static int clampBeats (int beats) { return std::clamp (beats, minBeats, maxBeats); }
+    static int clampNoteIndex (int i) { return std::clamp (i, 0, numNoteValues - 1); }
 
-    static const char* sigName (int i)
+    static int noteValue (int noteIndex)
     {
-        static const char* names[numSigs] = { "2/4", "3/4", "4/4", "5/4", "6/8", "7/8", "9/8", "12/8" };
-        return names[clampSig (i)];
+        static const int values[numNoteValues] = { 2, 4, 8, 16 };
+        return values[clampNoteIndex (noteIndex)];
+    }
+
+    // Index of the allowed note value closest to whatever number was typed in.
+    static int noteIndexFor (int typedValue)
+    {
+        int best = 0;
+        for (int i = 1; i < numNoteValues; ++i)
+            if (std::abs (noteValue (i) - typedValue) < std::abs (noteValue (best) - typedValue))
+                best = i;
+        return best;
     }
 
     // Pulses grouped the way the bar is felt: strong accent on the first pulse, medium on the start of each later group.
-    static const std::vector<int>& groups (int i)
+    static std::vector<int> groups (int beats, int note)
     {
-        static const std::vector<std::vector<int>> g = { { 2 }, { 3 }, { 4 }, { 3, 2 }, { 3, 3 }, { 2, 2, 3 }, { 3, 3, 3 }, { 3, 3, 3, 3 } };
-        return g[(size_t) clampSig (i)];
+        beats = clampBeats (beats);
+        if (note >= 8 && beats % 3 == 0 && beats > 3)   // 6/8, 9/8, 12/8, 6/16 ...: groups of three
+            return std::vector<int> ((size_t) (beats / 3), 3);
+        if (beats == 5)
+            return { 3, 2 };
+        if (beats == 7)
+            return { 2, 2, 3 };
+        return { beats };
     }
 
-    static int numPulses (int sig)
-    {
-        int total = 0;
-        for (int v : groups (sig))
-            total += v;
-        return total;
-    }
-
-    static int accentFor (int sig, int pulse)   // 2 = strong, 1 = medium, 0 = normal
+    static int accentFor (int beats, int note, int pulse)   // 2 = strong, 1 = medium, 0 = normal
     {
         int start = 0;
-        for (int g : groups (sig))
+        for (int g : groups (beats, note))
         {
             if (pulse == start)
                 return start == 0 ? 2 : 1;
@@ -63,7 +73,7 @@ public:
     }
 
     // Adds the clicks to l and r.
-    void process (float* l, float* r, int n, bool on, float bpm, int sig, float volKnob)
+    void process (float* l, float* r, int n, bool on, float bpm, int beatsIn, int noteIndex, float volKnob)
     {
         if (! on)
         {
@@ -72,8 +82,8 @@ public:
             return;
         }
 
-        sig = clampSig (sig);
-        const int pulses = numPulses (sig);
+        const int beats = clampBeats (beatsIn);
+        const int note = noteValue (noteIndex);
         if (! running)
         {
             running = true;
@@ -89,16 +99,16 @@ public:
         {
             if (samplesToNext <= 0.0)
             {
-                if (pulse >= pulses)
+                if (pulse >= beats)
                     pulse = 0;
 
-                const int accent = accentFor (sig, pulse);
+                const int accent = accentFor (beats, note, pulse);
                 const float freq = accent == 2 ? 1900.0f : accent == 1 ? 1400.0f : 1000.0f;
                 clickInc = 6.2831853f * freq / (float) sr;
                 clickEnv = accent == 2 ? 1.0f : accent == 1 ? 0.8f : 0.6f;
                 clickPhase = 0.0f;
                 shown.store (pulse);
-                pulse = (pulse + 1) % pulses;
+                pulse = (pulse + 1) % beats;
                 samplesToNext += pulseLength;
             }
             samplesToNext -= 1.0;

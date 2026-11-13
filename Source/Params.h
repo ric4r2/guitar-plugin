@@ -19,8 +19,6 @@ namespace Params
         const char* title;
         const char* onId;
         std::vector<KnobDef> knobs;
-        const char* toggleId = nullptr;      // optional second switch (e.g. wah auto mode)
-        const char* toggleLabel = nullptr;
     };
 
     inline juce::String format (const KnobDef& k, float v)
@@ -45,15 +43,22 @@ namespace Params
         return defs;
     }
 
+    // The wah has its own view: a treadle (position) with an engage switch, plus an auto-wah box
+    // whose switch turns the envelope-following mode on.
+    inline constexpr const char* wahOn = "wah_on";
+    inline const KnobDef& wahPosKnob() { static const KnobDef d { "wah_pos", "POSITION", 0.0f, 10.0f, 5.0f, 0.01f }; return d; }
+    inline const PedalDef& wahAutoPedal()
+    {
+        static const PedalDef d { "AUTO WAH", "wah_auto",
+                                  { { "wah_sens", "SENS", 0.0f, 10.0f, 5.0f, 0.01f },
+                                    { "wah_q", "RESONANCE", 0.0f, 10.0f, 5.0f, 0.01f } } };
+        return d;
+    }
+
     // Pedals before the amp, shared by both channels.
     inline const std::vector<PedalDef>& prePedals()
     {
         static const std::vector<PedalDef> defs = {
-            { "WAH", "wah_on",
-              { { "wah_pos", "POSITION", 0.0f, 10.0f, 5.0f, 0.01f },
-                { "wah_sens", "SENS", 0.0f, 10.0f, 5.0f, 0.01f },
-                { "wah_q", "RESONANCE", 0.0f, 10.0f, 5.0f, 0.01f } },
-              "wah_auto", "AUTO" },
             { "COMPRESSOR", "comp_on",
               { { "comp_sustain", "SUSTAIN", 0.0f, 10.0f, 3.0f, 0.01f },
                 { "comp_attack", "ATTACK", 0.0f, 10.0f, 4.0f, 0.01f },
@@ -113,6 +118,7 @@ namespace Params
     // Metronome
     inline constexpr const char* metroOn = "metro_on";
     inline constexpr const char* metroBpm = "metro_bpm";
-    inline constexpr const char* metroSig = "metro_sig";
+    inline constexpr const char* metroBeats = "metro_beats";   // 1..16 pulses per bar
+    inline constexpr const char* metroNote = "metro_note";     // choice: which note value gets the pulse (2, 4, 8, 16)
     inline constexpr const char* metroVol = "metro_vol";
 }

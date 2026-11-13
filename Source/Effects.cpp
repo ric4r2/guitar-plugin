@@ -496,6 +496,14 @@ namespace fx
         mix.setCurrentAndTargetValue (0.0f);
     }
 
+    void DelayFx::reset()
+    {
+        for (auto& b : buf)
+            std::fill (b.begin(), b.end(), 0.0f);
+        lp.fill (0.0f);
+        writePos = 0;
+    }
+
     void DelayFx::process (float* l, float* r, int n, bool on, float timeMs, float fbKnob, float toneKnob, float mixKnob)
     {
         time.setTargetValue (timeMs);
@@ -547,6 +555,14 @@ namespace fx
         reverbMix.setCurrentAndTargetValue (0.0f);
         wetL.assign ((size_t) maxBlockSize, 0.0f);
         wetR.assign ((size_t) maxBlockSize, 0.0f);
+    }
+
+    void PostFx::reset()
+    {
+        phaser.reset();
+        chorus.reset();
+        reverb.reset();
+        delay.reset();
     }
 
     void PostFx::process (float* l, float* r, int n, const PostParams& p)

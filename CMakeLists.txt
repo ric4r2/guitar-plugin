@@ -9,11 +9,11 @@ FetchContent_Declare(JUCE
 FetchContent_MakeAvailable(JUCE)
 
 juce_add_plugin(GuitarDrive
-    COMPANY_NAME "Richie"
+    COMPANY_NAME "Joe Garcia"
     PLUGIN_MANUFACTURER_CODE Rcrz
     PLUGIN_CODE Gdrv
     FORMATS VST3 Standalone
-    PRODUCT_NAME "GuitarDrive"
+    PRODUCT_NAME "Joe Garcia Rig"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     COPY_PLUGIN_AFTER_BUILD FALSE)  # TRUE copies to Program Files\Common Files\VST3 (needs admin)
@@ -22,7 +22,8 @@ target_sources(GuitarDrive PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/ChannelStrip.cpp
-    Source/Effects.cpp)
+    Source/Effects.cpp
+    Source/Presets.cpp)
 
 # Standalone app: JUCE's stock app, except the window always opens centred.
 target_sources(GuitarDrive_Standalone PRIVATE Source/StandaloneApp.cpp)
@@ -37,7 +38,7 @@ target_compile_definitions(GuitarDrive PUBLIC
 option(GUITARDRIVE_BUILD_TESTS "Build the offline DSP tests" OFF)
 if(GUITARDRIVE_BUILD_TESTS)
     juce_add_console_app(GuitarDriveTests PRODUCT_NAME "GuitarDriveTests")
-    target_sources(GuitarDriveTests PRIVATE Tests/DspTests.cpp Source/ChannelStrip.cpp Source/Effects.cpp)
+    target_sources(GuitarDriveTests PRIVATE Tests/DspTests.cpp Source/ChannelStrip.cpp Source/Effects.cpp Source/Presets.cpp)
     target_include_directories(GuitarDriveTests PRIVATE Source)
     target_compile_definitions(GuitarDriveTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
     target_link_libraries(GuitarDriveTests PRIVATE
@@ -54,7 +55,11 @@ if(ASIO_SDK_DIR AND EXISTS "${ASIO_SDK_DIR}/common/asio.h")
     target_include_directories(GuitarDrive PRIVATE "${ASIO_SDK_DIR}/common")
 endif()
 
+# The logo is an image file embedded in the program (replace Assets/joe-garcia-logo.png to change it).
+juce_add_binary_data(GuitarDriveAssets SOURCES Assets/joe-garcia-logo.png)
+
 target_link_libraries(GuitarDrive PRIVATE
+    GuitarDriveAssets
     juce::juce_audio_utils
     juce::juce_dsp
     PUBLIC

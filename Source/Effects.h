@@ -195,6 +195,7 @@ namespace fx
     {
     public:
         void prepare (double sampleRate);
+        void reset();
         void process (float* l, float* r, int n, bool on, float timeMs, float fbKnob, float toneKnob, float mixKnob);
 
     private:
@@ -220,6 +221,7 @@ namespace fx
     {
     public:
         void prepare (double sampleRate, int maxBlockSize);
+        void reset();   // clears the tails without allocating
         void process (float* l, float* r, int n, const PostParams& p);
 
     private:

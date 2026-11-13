@@ -7,8 +7,10 @@
 
 #include "ChannelStrip.h"
 #include "Effects.h"
+#include "Logo.h"
 #include "Metronome.h"
 #include "PlateReverb.h"
+#include "Presets.h"
 #include "SpringReverb.h"
 #include "Tuner.h"
 
@@ -295,7 +297,7 @@ namespace
         m.prepare (sr);
         std::vector<float> l ((size_t) (sr * 4.1)), r (l.size());
         for (size_t s = 0; s < l.size(); s += 512)
-            m.process (l.data() + s, r.data() + s, (int) std::min<size_t> (512, l.size() - s), true, 120.0f, 2, 8.0f);
+            m.process (l.data() + s, r.data() + s, (int) std::min<size_t> (512, l.size() - s), true, 120.0f, 4, 1, 8.0f);
 
         std::vector<double> peaks;
         for (size_t i = 0; i < l.size();)
@@ -314,7 +316,10 @@ namespace
         std::snprintf (buf, sizeof buf, "%zu clicks in 4.1 s at 120 BPM", peaks.size());
         check ("metronome pulse count (4/4 at 120 BPM)", peaks.size() == 9 || peaks.size() == 8, buf);
         check ("metronome accents the first beat", peaks.size() >= 2 && peaks[0] > peaks[1] * 1.2, "first click is louder");
-        check ("metronome 6/8 groups in threes", Metronome::numPulses (4) == 6 && Metronome::accentFor (4, 3) == 1 && Metronome::accentFor (4, 0) == 2, "accents on 1 and 4");
+        check ("metronome 6/8 groups in threes", Metronome::accentFor (6, 8, 3) == 1 && Metronome::accentFor (6, 8, 0) == 2 && Metronome::accentFor (6, 8, 1) == 0, "accents on 1 and 4");
+        check ("metronome 4/4 has one accent", Metronome::accentFor (4, 4, 0) == 2 && Metronome::accentFor (4, 4, 2) == 0, "beat 1 only");
+        check ("metronome 7/8 groups 2+2+3", Metronome::accentFor (7, 8, 2) == 1 && Metronome::accentFor (7, 8, 4) == 1 && Metronome::accentFor (7, 8, 3) == 0, "accents on 1, 3 and 5");
+        check ("typed note values snap to 2, 4, 8 or 16", Metronome::noteValue (Metronome::noteIndexFor (5)) == 4 && Metronome::noteValue (Metronome::noteIndexFor (7)) == 8 && Metronome::noteValue (Metronome::noteIndexFor (13)) == 16, "5 -> 4, 7 -> 8, 13 -> 16");
     }
 
     // click-tail brightness: share of the wet energy above 2 kHz, 30..400 ms after a pick click
@@ -437,6 +442,92 @@ namespace
         check ("plate reverb soak stays bounded", std::isfinite (peak) && peak < 3.0, buf);
     }
 
+    // a tiny processor with a few parameters, to exercise the preset manager without the whole rig
+    struct TestProcessor : juce::AudioProcessor
+    {
+        TestProcessor() = default;
+        const juce::String getName() const override { return "test"; }
+        void prepareToPlay (double, int) override {}
+        void releaseResources() override {}
+        void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        bool acceptsMidi() const override { return false; }
+        bool producesMidi() const override { return false; }
+        double getTailLengthSeconds() const override { return 0.0; }
+        int getNumPrograms() override { return 1; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram (int) override {}
+        const juce::String getProgramName (int) override { return {}; }
+        void changeProgramName (int, const juce::String&) override {}
+        void getStateInformation (juce::MemoryBlock&) override {}
+        void setStateInformation (const void*, int) override {}
+
+        static juce::AudioProcessorValueTreeState::ParameterLayout makeLayout()
+        {
+            std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
+            p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "gain", 1 }, "Gain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f));
+            p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "r_gain", 1 }, "R Gain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f));
+            p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "ts_drive", 1 }, "Drive", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 2.5f));
+            p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "ts_on", 1 }, "TS", false));
+            p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "metro_on", 1 }, "Metro", false));
+            return { p.begin(), p.end() };
+        }
+
+        juce::AudioProcessorValueTreeState apvts { *this, nullptr, "S", makeLayout() };
+
+        void set (const char* id, float denormalised)
+        {
+            auto* p = apvts.getParameter (id);
+            p->setValueNotifyingHost (p->convertTo0to1 (denormalised));
+        }
+        float get (const char* id) { auto* p = apvts.getParameter (id); return p->convertFrom0to1 (p->getValue()); }
+    };
+
+    void testPresets()
+    {
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                             .getChildFile ("jgr-preset-test-" + juce::String (juce::Random::getSystemRandom().nextInt (1000000)));
+        {
+            TestProcessor proc;
+            PresetManager pm (proc.apvts, proc, dir);
+
+            const auto factory = pm.names();
+            check ("factory presets are created on first run",
+                   factory.contains ("Init") && factory.contains ("Mayer Clean") && factory.contains ("SRV Edge"), factory.joinIntoString (", ").toRawUTF8());
+
+            pm.load ("SRV Edge");
+            std::snprintf (buf, sizeof buf, "ts_on %.0f, ts_drive %.1f, gain right copy %.1f", proc.get ("ts_on"), proc.get ("ts_drive"), proc.get ("r_gain"));
+            check ("loading a preset applies its values (both channels)", proc.get ("ts_on") > 0.5f && std::abs (proc.get ("ts_drive") - 3.0f) < 0.05f
+                                                                              && std::abs (proc.get ("r_gain") - 5.5f) < 0.05f, buf);
+            check ("a freshly loaded preset is not marked modified", pm.currentName() == "SRV Edge" && ! pm.isDirty(), "no asterisk");
+
+            proc.set ("gain", 8.0f);
+            check ("editing a loaded preset marks it modified", pm.isDirty(), "asterisk");
+
+            check ("saving clears the modified mark", pm.save ("SRV Edge") && ! pm.isDirty(), "asterisk gone");
+
+            proc.set ("metro_on", 1.0f);
+            check ("the metronome is not part of a preset", ! pm.isDirty(), "toggling it changes nothing");
+
+            proc.set ("gain", 2.0f);
+            check ("saving under a new name creates a preset", pm.save ("My Tone") && pm.names().contains ("My Tone") && pm.currentName() == "My Tone", "My Tone");
+
+            proc.set ("gain", 9.0f);
+            pm.load ("My Tone");
+            check ("a saved preset loads back exactly", std::abs (proc.get ("gain") - 2.0f) < 0.05f && ! pm.isDirty(), "gain 2.0");
+
+            check ("deleting a preset removes it and the selection", pm.remove ("My Tone") && ! pm.names().contains ("My Tone") && pm.currentName().isEmpty(), "gone");
+
+            pm.load ("Init");
+            proc.set ("gain", 7.0f);
+            check ("the name is kept in the plugin state", proc.apvts.state.getProperty ("preset").toString() == "Init", "Init");
+            pm.restoreFromState();
+            check ("modified state is recognised after the host restores it", pm.isDirty(), "asterisk survives a reload");
+        }
+        dir.deleteRecursively();
+    }
+
     struct StripFixture
     {
         std::atomic<float> gate { 0 }, trans { 0 }, gain { 5 }, warmth { 3 }, bass { 5 }, mid { 5 }, treble { 5 }, reverb { 2.5f }, master { 8 }, revType { 0 };
@@ -444,10 +535,21 @@ namespace
         std::atomic<float> compOn { 0 }, compSustain { 3 }, compAttack { 4 }, compLevel { 5 };
         std::atomic<float> tsOn { 0 }, tsDrive { 2.5f }, tsTone { 5.5f }, tsLevel { 6.5f };
         std::atomic<float> odOn { 0 }, odDrive { 4 }, odTone { 5 }, odLevel { 5 };
+        std::atomic<float> off { 0 }, one { 1 }, five { 5 }, delayTime { 380 };   // equalizer and post effects stay flat / off
 
         ChannelStrip::Params params()
         {
             ChannelStrip::Params p;
+            p.eqOn = &one;
+            p.eq.fill (&off);
+            auto& q = p.post;
+            q.phOn = q.chOn = q.trOn = q.dlOn = q.rvOn = &off;
+            q.phRate = q.phDepth = q.phFb = q.phMix = &five;
+            q.chRate = q.chDepth = q.chMix = &five;
+            q.trRate = q.trDepth = &five;
+            q.dlTime = &delayTime;
+            q.dlFb = q.dlTone = q.dlMix = &five;
+            q.rvSize = q.rvDamp = q.rvMix = &five;
             p.gate = &gate; p.trans = &trans; p.gain = &gain; p.warmth = &warmth; p.bass = &bass; p.mid = &mid;
             p.treble = &treble; p.reverb = &reverb; p.master = &master; p.revType = &revType;
             p.wahOn = &wahOn; p.wahAuto = &wahAuto; p.wahPos = &wahPos; p.wahSens = &wahSens; p.wahQ = &wahQ;
@@ -508,8 +610,21 @@ namespace
     }
 }
 
-int main()
+int main (int argc, char** argv)
 {
+    // GuitarDriveTests --logo <output.png> [font name]: save the chrome artist logo as an image
+    if (argc >= 3 && std::string (argv[1]) == "--logo")
+    {
+        juce::ScopedJuceInitialiser_GUI init;
+        const auto image = Logo::render (1500, 700, argc >= 4 ? juce::String (argv[3]) : juce::String (Logo::defaultFont()));
+        juce::File out (argv[2]);
+        out.deleteFile();
+        juce::FileOutputStream stream (out);
+        const bool ok = stream.openedOk() && juce::PNGImageFormat().writeImageToStream (image, stream);
+        std::printf ("%s %s\n", ok ? "wrote" : "FAILED to write", argv[2]);
+        return ok ? 0 : 1;
+    }
+
     testGate();
     testTransposer();
     testCompressor();
@@ -520,6 +635,7 @@ int main()
     testMetronome();
     testReverbs();
     testStrip();
+    testPresets();
 
     std::printf ("\n%d failure%s\n", failures, failures == 1 ? "" : "s");
     return failures;

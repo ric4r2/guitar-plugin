@@ -28,6 +28,11 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     sr = sampleRate;
     maxBlock = maxBlockSize;
     dryScratch.assign ((size_t) maxBlockSize, 0.0f);
+    eqDryL.assign ((size_t) maxBlockSize, 0.0f);
+    eqDryR.assign ((size_t) maxBlockSize, 0.0f);
+    eq.prepare (sampleRate, maxBlockSize);
+    eqSwitch.prepare (sampleRate, params.eqOn->load() > 0.5f);
+    post.prepare (sampleRate, maxBlockSize);
 
     gate.prepare (sampleRate);
     shifter.prepare (sampleRate);
@@ -78,6 +83,7 @@ void ChannelStrip::reset()
     reverbDuck.reset();
     spring.reset();
     plate.reset();
+    post.reset();
     oversampling.reset();
     for (auto* f : { &bassFilter, &midFilter, &trebleFilter })
         f->reset();
@@ -197,5 +203,42 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
 
         outL[i] = (dry + wet * wl) * master;
         outR[i] = (dry + wet * wr) * master;
+    }
+
+    // equalizer, then the effects after it
+    {
+        if ((int) eqDryL.size() < n)
+        {
+            eqDryL.resize ((size_t) n);
+            eqDryR.resize ((size_t) n);
+        }
+
+        std::array<float, ::Params::numEqBands> gains;
+        for (size_t b = 0; b < gains.size(); ++b)
+            gains[b] = params.eq[b]->load();
+
+        eqSwitch.setOn (params.eqOn->load() > 0.5f);
+        if (eqSwitch.needsProcessing())
+        {
+            std::copy (outL, outL + n, eqDryL.begin());
+            std::copy (outR, outR + n, eqDryR.begin());
+            eq.process (outL, outR, n, gains);
+            eqSwitch.blend (eqDryL.data(), eqDryR.data(), outL, outR, n);
+        }
+    }
+
+    {
+        const auto& q = params.post;
+        fx::PostParams pp;
+        pp.phOn = q.phOn->load() > 0.5f;   pp.phRate = q.phRate->load();   pp.phDepth = q.phDepth->load();
+        pp.phFb = q.phFb->load();   pp.phMix = q.phMix->load();
+        pp.chOn = q.chOn->load() > 0.5f;   pp.chRate = q.chRate->load();   pp.chDepth = q.chDepth->load();
+        pp.chMix = q.chMix->load();
+        pp.trOn = q.trOn->load() > 0.5f;   pp.trRate = q.trRate->load();   pp.trDepth = q.trDepth->load();
+        pp.dlOn = q.dlOn->load() > 0.5f;   pp.dlTime = q.dlTime->load();   pp.dlFb = q.dlFb->load();
+        pp.dlTone = q.dlTone->load();   pp.dlMix = q.dlMix->load();
+        pp.rvOn = q.rvOn->load() > 0.5f;   pp.rvSize = q.rvSize->load();   pp.rvDamp = q.rvDamp->load();
+        pp.rvMix = q.rvMix->load();
+        post.process (outL, outR, n, pp);
     }
 }

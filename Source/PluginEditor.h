@@ -1,4 +1,5 @@
 #pragma once
+#include "Logo.h"
 #include "PluginProcessor.h"
 #include "Textures.h"
 #include "VintageLook.h"
@@ -41,7 +42,7 @@ struct KnobUI
     }
 };
 
-// Chromatic tuner shown in place of everything else: note name, cents offset and a meter.
+// Chromatic tuner shown in place of the views: note name, cents offset and a meter.
 class TunerView : public juce::Component, private juce::Timer
 {
 public:
@@ -68,51 +69,50 @@ private:
     double hz = 0.0;
 };
 
-// The amp, drawn as a tweed combo: control plate with chrome knobs, and grille cloth below.
-// One amp in mono mode, two (left and right) in stereo mode.
+// The amp, drawn as a tweed combo: control plate with cream Fender-style knobs, and grille cloth with the logo below.
+// One amp in mono mode, two (left above right) in stereo mode.
 class AmpView : public juce::Component
 {
 public:
-    explicit AmpView (GuitarDriveProcessor&);
+    AmpView (GuitarDriveProcessor&, const juce::Image& logoImage);
 
     void setStereo (bool on);
     void resized() override;
     void paint (juce::Graphics&) override;
 
 private:
-    static constexpr int numKnobs = 10;   // the 9 strip knobs plus pan
+    static constexpr int numKnobs = 9;
 
     struct Strip
     {
         std::array<KnobUI, numKnobs> knobs;
         juce::Label name;
-        juce::TextButton solo { "SOLO" }, mute { "MUTE" }, revType { "PLATE" };
+        juce::TextButton revType { "PLATE" };
         int revState = 0;
     };
 
     void layoutAmp (int index, juce::Rectangle<int> cabinetArea, bool stereoRow);
     void paintAmp (juce::Graphics&, int index);
-    void setSolo (int state);
-    void updateSoloButtons();
     void updateVisibility();
 
     juce::AudioProcessorValueTreeState& apvts;
+    const juce::Image& logo;
     std::array<Strip, 2> strips;
     std::array<std::unique_ptr<juce::ParameterAttachment>, 2> revAttach;
-    juce::ParameterAttachment soloAttach;
     std::array<juce::Rectangle<int>, 2> cabinet, plate, grille;
     juce::Image tweedImage, grilleImage;
     bool stereo = false;
-    int soloState = 0;
 };
 
-// One stompbox: brushed aluminum, cream Strat knobs, and a footswitch with a colored LED.
+// A stompbox shaped like a real one: a tall rectangle of brushed aluminum with the name on top, the knobs below it,
+// and the aluminum footswitch with its colored LED at the bottom. `strip` picks the left (0) or right (1) channel.
 class PedalPanel : public juce::Component
 {
 public:
-    PedalPanel (juce::AudioProcessorValueTreeState&, const Params::PedalDef&);
+    PedalPanel (juce::AudioProcessorValueTreeState&, const Params::PedalDef&, int strip);
 
     int getNumKnobs() const { return (int) knobs.size(); }
+    int preferredWidth() const { return knobs.size() <= 2 ? 150 : 220; }
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -123,30 +123,77 @@ private:
     const Params::PedalDef& def;
     Colours colours;
     FootSwitch footSwitch;
-    juce::TextButton toggleButton;
     std::vector<std::unique_ptr<KnobUI>> knobs;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAttach, toggleAttach;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAttach;
     juce::Rectangle<int> titleArea;
     juce::Image brushed;
 };
 
-// Several pedals laid out in rows; `rows` lists the pedal indices on each row.
+// Pedals side by side in one row, centred.
 class PedalBoard : public juce::Component
 {
 public:
-    PedalBoard (juce::AudioProcessorValueTreeState&, const std::vector<Params::PedalDef>&, std::vector<std::vector<int>> rows);
+    PedalBoard (juce::AudioProcessorValueTreeState&, const std::vector<Params::PedalDef>&, int strip);
     void resized() override;
 
 private:
     std::vector<std::unique_ptr<PedalPanel>> panels;
-    std::vector<std::vector<int>> rows;
+};
+
+// The wah treadle: drag it, scroll over it, or double-click for the middle. Toe down is the top of the picture.
+class WahTreadle : public juce::Component
+{
+public:
+    WahTreadle (juce::AudioProcessorValueTreeState&, int strip);
+
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+
+private:
+    juce::Rectangle<float> padArea() const;
+    void setFromMouse (const juce::MouseEvent&);
+
+    juce::ParameterAttachment attachment;
+    float value = 5.0f;
+};
+
+// The wah pedal itself: treadle and engage switch.
+class WahPedal : public juce::Component
+{
+public:
+    WahPedal (juce::AudioProcessorValueTreeState&, int strip);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    WahTreadle treadle;
+    FootSwitch footSwitch { juce::Colour (0xffb56bff) };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAttach;
+    juce::Rectangle<int> titleArea;
+    juce::Image brushed;
+};
+
+// Wah view: the wah pedal and, beside it, the auto-wah box (its switch turns the auto mode on).
+class WahView : public juce::Component
+{
+public:
+    WahView (juce::AudioProcessorValueTreeState&, int strip);
+    void resized() override;
+
+private:
+    WahPedal wah;
+    PedalPanel autoWah;
 };
 
 // 8-band graphic equalizer pedal with a live response curve.
 class EqView : public juce::Component
 {
 public:
-    explicit EqView (juce::AudioProcessorValueTreeState&);
+    EqView (juce::AudioProcessorValueTreeState&, int strip);
     void resized() override;
     void paint (juce::Graphics&) override;
 
@@ -168,31 +215,58 @@ private:
     juce::Image brushed;
 };
 
-// The metronome as its own device: big BPM readout, tap tempo, time signature buttons and pulse lights.
-class MetronomeView : public juce::Component, private juce::Timer
+// Footer shown under every view: tuner button, then the metronome in one horizontal row.
+// Tempo and time signature are typed with the keyboard (the wheel and arrow keys also nudge them).
+class FooterBar : public juce::Component, private juce::Timer
 {
 public:
-    explicit MetronomeView (GuitarDriveProcessor&);
+    explicit FooterBar (GuitarDriveProcessor&);
 
     void resized() override;
     void paint (juce::Graphics&) override;
-    void visibilityChanged() override;
+
+    juce::TextButton tunerButton { "TUNER" };
 
 private:
-    void timerCallback() override { repaint (displayArea); }
+    void timerCallback() override { repaint (dotsArea); }
     void tap();
 
     GuitarDriveProcessor& proc;
-    KnobUI bpm, vol;
-    FootSwitch runSwitch { juce::Colour (0xff3dff6c) };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> runAttach;
+    PlayPauseButton playButton;
+    NumberBox bpmBox { 30, 260, 3 }, beatsBox { 1, 16, 2 }, noteBox { 2, 16, 2 };
     juce::TextButton tapButton { "TAP" };
-    std::array<juce::TextButton, Metronome::numSigs> sigButtons;
-    juce::Label sigLabel, runLabel, tapLabel;
-    juce::ParameterAttachment sigAttach;
+    juce::Label tempoLabel, sigLabel, slashLabel;
+    KnobUI vol;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> playAttach;
+    juce::ParameterAttachment bpmAttach, beatsAttach, noteAttach;
     std::vector<double> taps;
-    juce::Rectangle<int> displayArea;
-    int sigIndex = 2;
+    juce::Rectangle<int> dotsArea;
+};
+
+// Preset bar at the top centre: step through presets, pick one from a menu, save, create and delete.
+// A modified preset shows an asterisk after its name (like an unsaved tab in a code editor); saving removes it.
+class PresetBar : public juce::Component, private juce::Timer
+{
+public:
+    explicit PresetBar (GuitarDriveProcessor&);
+
+    void resized() override;
+    void paint (juce::Graphics&) override;
+
+private:
+    void timerCallback() override { refresh(); }
+    void refresh();
+    void showMenu();
+    void step (int direction);
+    void saveCurrent();
+    void saveAsNew();
+    void saveNamed (const juce::String& name);
+    void askDelete();
+    void askName (const juce::String& title, const juce::String& initial, std::function<void (const juce::String&)> onName);
+
+    GuitarDriveProcessor& proc;
+    juce::TextButton prevButton { "<" }, nextButton { ">" }, nameButton, saveButton { "SAVE" }, newButton { "NEW" }, deleteButton { "DELETE" };
+    juce::String shownText;
 };
 
 class GuitarDriveEditor : public juce::AudioProcessorEditor
@@ -205,7 +279,7 @@ public:
     void resized() override;
 
 private:
-    enum class View { pre = 0, amp, eq, post, metro };
+    enum class View { wah = 0, pre, amp, eq, post };
 
     // Everything lives in a fixed-size "design" space and is scaled to the window, so the window can be any size.
     struct Root : juce::Component
@@ -214,35 +288,51 @@ private:
         void paint (juce::Graphics& g) override { if (painter) painter (g); }
     };
 
+    // pan, solo and mute of one channel, shown in the header in stereo mode
+    struct ChannelControls
+    {
+        KnobUI pan;
+        juce::Label name;
+        juce::TextButton solo { "SOLO" }, mute { "MUTE" };
+    };
+
     void paintRoot (juce::Graphics&);
     void recomputeDesign();
     void layout();
+    juce::Rectangle<int> channelRect (int channel) const;
     void setStereo (bool);
     void setTunerOpen (bool);
     void setView (View);
+    void setSolo (int state);
+    void updateSoloButtons();
     void updateVisibility();
     float fitScale() const;
     void keepOnScreen();
 
-    static constexpr int headerH = 84, gap = 8, hintH = 26, designW = 1200;
+    static constexpr int presetBarH = 44, headerH = 104, gap = 8, footerH = 84, hintH = 26, designW = 1360;
+    static constexpr int monoBodyH = 340, stereoHalfH = 330, sideTagW = 64;
 
     GuitarDriveProcessor& proc;
     VintageLook look;
     Root root;
+    juce::Image logoImage;
 
     std::array<juce::TextButton, 5> tabs;
     KnobUI inputKnob, outputKnob;
-    juce::TextButton tunerButton { "TUNER" }, stereoButton { "STEREO" }, rightInButton { "R USES IN 1" };
+    std::array<ChannelControls, 2> channels;
+    juce::TextButton stereoButton { "STEREO" }, rightInButton { "R USES IN 1" };
     AmpView ampView;
-    PedalBoard preBoard, postBoard;
-    EqView eqView;
-    MetronomeView metroView;
+    std::array<std::unique_ptr<WahView>, 2> wahViews;
+    std::array<std::unique_ptr<PedalBoard>, 2> preBoards, postBoards;
+    std::array<std::unique_ptr<EqView>, 2> eqViews;
+    FooterBar footer;
+    PresetBar presetBar;
     TunerView tunerView;
-    juce::ParameterAttachment stereoAttach, rightInAttach;
+    juce::ParameterAttachment stereoAttach, rightInAttach, soloAttach;
 
     juce::Image frameImage, carpetImage;
-    juce::Rectangle<int> titleRect, headerRect, bodyRect;
-    int designH = 460, bodyH = 340;
+    juce::Rectangle<int> titleRect, headerRect, channelPlateRect, bodyRect, footerRect;
+    int designH = 550, bodyH = monoBodyH, soloState = 0;
     View view = View::amp;
     bool stereoMode = false, tunerOpen = false, rightUsesIn1 = true, sizeInitialised = false;
 
