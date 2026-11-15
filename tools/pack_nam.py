@@ -17,7 +17,8 @@ Format (little endian), after zlib:
 import glob, io, json, os, re, struct, sys, zipfile, zlib
 
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), '..', '..')
+    # the downloads are kept in the (private) repository, in Assets/private-ir/source
+    src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Assets', 'private-ir', 'source')
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Assets', 'private-ir', 'nam.bin')
 
     def zip_named(pattern):

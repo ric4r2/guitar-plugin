@@ -97,14 +97,19 @@ def trim_spring(x, rate):
     return y
 
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), '..', '..')
+    # the downloads are kept in the (private) repository, in Assets/private-ir/source
+    src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Assets', 'private-ir', 'source')
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Assets', 'private-ir', 'irs.bin')
 
     def zip_named(pattern):
         hits = glob.glob(os.path.join(src, pattern))
-        if not hits:
+        if hits:
+            return zipfile.ZipFile(hits[0])
+        # a zip too big for GitHub is kept in parts (name.zip.001, .002, ...): join them in memory
+        parts = sorted(glob.glob(os.path.join(src, pattern + '.[0-9][0-9][0-9]')))
+        if not parts:
             sys.exit('missing ' + pattern + ' in ' + src)
-        return zipfile.ZipFile(hits[0])
+        return zipfile.ZipFile(io.BytesIO(b''.join(open(part, 'rb').read() for part in parts)))
 
     entries = []   # (group, a, b, rate, samples, format)
 

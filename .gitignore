@@ -4,5 +4,5 @@ out/
 .vscode/
 *.user
 CMakeUserPresets.json
-# recorded cabinet IRs: personal use only, not redistributable
-Assets/private-ir/
+# Assets/private-ir/ (recorded IRs and NAM captures) IS committed: this repository is private and they are for
+# personal use only. Never make the repository public or share builds while they are in it.

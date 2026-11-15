@@ -1520,6 +1520,9 @@ void GuitarDriveEditor::setTunerOpen (bool open)
 void GuitarDriveEditor::setView (View v)
 {
     view = v;
+    for (int i = 0; i < (int) tabs.size(); ++i)   // light the tab of the view shown, however it was switched to
+        if (tabs[(size_t) i] != nullptr)
+            tabs[(size_t) i]->setToggleState (i == (int) v, juce::dontSendNotification);
     if (tunerOpen)
         setTunerOpen (false);
     updateVisibility();
