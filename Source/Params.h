@@ -26,27 +26,54 @@ namespace Params
         return (k.min < 0.0f && v > 0.0f ? "+" : "") + juce::String (v, k.decimals) + k.unit;
     }
 
-    // Knobs that exist once per channel strip (mono / left, and right in stereo mode).
+    // Shared knobs in front of the amps: the noise gate and transposer, and the Fender spring reverb unit, which sits
+    // between the pedals and the amps and feeds all three (its DWELL and TONE pick one of the recorded tank positions).
     inline const std::vector<KnobDef>& stripKnobs()
     {
         static const std::vector<KnobDef> defs = {
-            { "gate",   "GATE",      0.0f, 10.0f, 0.0f, 0.01f },
-            { "trans",  "TRANSPOSE", -12.0f, 12.0f, 0.0f, 1.0f, " st", 0 },
-            { "gain",   "GAIN",      0.0f, 10.0f, 5.0f, 0.01f },
-            { "warmth", "WARMTH",    0.0f, 10.0f, 3.0f, 0.01f },
-            { "bass",   "BASS",      0.0f, 10.0f, 5.0f, 0.01f },
-            { "mid",    "MID",       0.0f, 10.0f, 5.0f, 0.01f },
-            { "treble", "TREBLE",    0.0f, 10.0f, 5.0f, 0.01f },
-            { "reverb", "REVERB",    0.0f, 10.0f, 2.5f, 0.01f },
-            { "master", "MASTER",    0.0f, 10.0f, 8.0f, 0.01f },
-            // recorded cabinet microphones (dark 0, balanced 5, clean and bright 10) and the spring tank's own knobs;
-            // these work when the program was built with the recorded IRs
-            { "cab_mic",   "MIC",    0.0f, 10.0f, 10.0f, 0.01f },
-            { "rev_dwell", "DWELL",  1.0f, 10.0f, 5.0f, 1.0f, "", 0 },
-            { "rev_tone",  "TONE",   1.0f, 10.0f, 5.0f, 1.0f, "", 0 },
+            { "gate",      "GATE",      0.0f, 10.0f, 0.0f, 0.01f },
+            { "trans",     "TRANSPOSE", -12.0f, 12.0f, 0.0f, 1.0f, " st", 0 },
+            { "rev_dwell", "DWELL",     1.0f, 10.0f, 5.0f, 1.0f, "", 0 },
+            { "rev_tone",  "TONE",      1.0f, 10.0f, 5.0f, 1.0f, "", 0 },
+            { "reverb",    "MIX",       0.0f, 10.0f, 2.5f, 0.01f },
         };
         return defs;
     }
+
+    // Three amp heads, played in parallel like John Mayer's rig, each with its own speaker cabinet:
+    // 0 Fender (Twin Reverb, from its circuit), 1 Two-Rock (from its circuit), 2 Dumble (NAM captures).
+    inline constexpr int numHeads = 3;
+    // id prefixes ("tr" is taken by the tremolo)
+    inline const char* headPrefix (int head) { static const char* p[] = { "fn", "rk", "dm" }; return p[juce::jlimit (0, 2, head)]; }
+    inline const char* headTitle (int head)  { static const char* t[] = { "Fender", "Two-Rock", "Dumble" }; return t[juce::jlimit (0, 2, head)]; }
+    inline juce::String headId (int head, const char* knob) { return juce::String (headPrefix (head)) + "_" + knob; }
+
+    // each head's knobs, ids without the head prefix (see headId)
+    inline const std::vector<KnobDef>& headKnobs (int head)
+    {
+        static const std::vector<KnobDef> circuit = {
+            { "volume", "VOLUME", 0.0f, 10.0f, 5.0f, 0.01f },
+            { "treble", "TREBLE", 0.0f, 10.0f, 5.0f, 0.01f },
+            { "mid",    "MIDDLE", 0.0f, 10.0f, 5.0f, 0.01f },
+            { "bass",   "BASS",   0.0f, 10.0f, 5.0f, 0.01f },
+            { "master", "MASTER", 0.0f, 10.0f, 7.0f, 0.01f },
+            { "mic",    "MIC",    0.0f, 10.0f, 10.0f, 0.01f },   // cabinet microphones: dark 0, balanced 5, clean 10
+        };
+        // VOICE sweeps the captures from the cleanest to the most driven
+        static const std::vector<KnobDef> dumble = {
+            { "voice",  "VOICE",  0.0f, 10.0f, 0.0f, 0.01f },
+            { "volume", "VOLUME", 0.0f, 10.0f, 5.0f, 0.01f },
+            { "treble", "TREBLE", 0.0f, 10.0f, 5.0f, 0.01f },
+            { "mid",    "MIDDLE", 0.0f, 10.0f, 5.0f, 0.01f },
+            { "bass",   "BASS",   0.0f, 10.0f, 5.0f, 0.01f },
+            { "master", "MASTER", 0.0f, 10.0f, 7.0f, 0.01f },
+            { "mic",    "MIC",    0.0f, 10.0f, 10.0f, 0.01f },
+        };
+        return head == 2 ? dumble : circuit;
+    }
+
+    // the same pedals, with the overdrive shown as the TS9 when its captures are built in
+    inline const std::vector<PedalDef>& prePedalsTs9();
 
     // The wah has its own view: a treadle (position) with an engage switch, plus an auto-wah box
     // whose switch turns the envelope-following mode on.
@@ -126,4 +153,17 @@ namespace Params
     inline constexpr const char* metroBeats = "metro_beats";   // 1..16 pulses per bar
     inline constexpr const char* metroNote = "metro_note";     // choice: which note value gets the pulse (2, 4, 8, 16)
     inline constexpr const char* metroVol = "metro_vol";
+
+    inline const std::vector<PedalDef>& prePedalsTs9()
+    {
+        static const std::vector<PedalDef> defs = []
+        {
+            auto copy = prePedals();
+            for (auto& d : copy)
+                if (juce::String (d.onId) == "od_on")
+                    d.title = "TS9";
+            return copy;
+        }();
+        return defs;
+    }
 }

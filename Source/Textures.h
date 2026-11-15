@@ -4,6 +4,23 @@
 // Procedural surface textures, generated once per size.
 namespace Textures
 {
+    // Amp covering: a pebbled vinyl in the given colour.
+    inline juce::Image tolex (int w, int h, juce::Colour colour, int seed)
+    {
+        juce::Image img (juce::Image::RGB, juce::jmax (1, w), juce::jmax (1, h), true);
+        juce::Graphics g (img);
+        g.setGradientFill (juce::ColourGradient (colour.brighter (0.12f), 0.0f, 0.0f, colour.darker (0.25f), 0.0f, (float) h, false));
+        g.fillAll();
+        juce::Random rng (seed);
+        for (int i = 0; i < w * h / 3; ++i)
+        {
+            const int x = rng.nextInt (juce::jmax (1, w)), y = rng.nextInt (juce::jmax (1, h));
+            g.setColour (rng.nextBool() ? juce::Colour (0x10ffffff) : juce::Colour (0x1c000000));
+            g.fillRect (x, y, 1 + rng.nextInt (2), 1);
+        }
+        return img;
+    }
+
     // The frame: dark green with a fine grain, a soft light in the middle and darker corners.
     inline juce::Image felt (int w, int h)
     {

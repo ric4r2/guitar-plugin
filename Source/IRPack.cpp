@@ -97,9 +97,15 @@ bool IRPack::cabinet (int model, float micKnob, juce::AudioBuffer<float>& out, d
     cab::normaliseAt1k (ia, rate);
     cab::normaliseAt1k (ib, rate);
 
-    out.setSize (1, length);
-    for (int i = 0; i < length; ++i)
-        out.setSample (0, i, ia.getSample (0, i) * (1.0f - frac) + ib.getSample (0, i) * frac);
+    // a speaker's response is over within about 150 ms: the rest is noise, and only costs processing
+    const int kept = juce::jmin (length, (int) (0.15 * rate));
+    const int fade = kept / 5;
+    out.setSize (1, kept);
+    for (int i = 0; i < kept; ++i)
+    {
+        const float w = i < kept - fade ? 1.0f : 0.5f + 0.5f * std::cos (juce::MathConstants<float>::pi * (float) (i - (kept - fade)) / (float) fade);
+        out.setSample (0, i, (ia.getSample (0, i) * (1.0f - frac) + ib.getSample (0, i) * frac) * w);
+    }
     cab::normaliseAt1k (out, rate);
     return true;
 }

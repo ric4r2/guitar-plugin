@@ -370,3 +370,40 @@ private:
     juce::StringArray names;
     int position = 0;
 };
+
+// An amp's power switch drawn as its pilot light: a faceted jewel in a chrome bezel that glows when the amp is on.
+class JewelSwitch : public juce::Button
+{
+public:
+    explicit JewelSwitch (juce::Colour lit) : juce::Button ("power"), colour (lit) { setClickingTogglesState (true); }
+
+    void paintButton (juce::Graphics& g, bool highlighted, bool) override
+    {
+        const auto r = getLocalBounds().toFloat();
+        const float d = (juce::jmin (r.getWidth(), r.getHeight()) - 4.0f) * 0.75f;
+        const auto c = r.getCentre();
+        const bool on = getToggleState();
+        if (on)   // glow, kept inside the button so it stays round
+        {
+            const float g2 = juce::jmin (r.getWidth(), r.getHeight()) * 0.5f;
+            g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.6f), c.x, c.y, colour.withAlpha (0.0f), c.x + g2, c.y, true));
+            g.fillEllipse (c.x - g2, c.y - g2, g2 * 2.0f, g2 * 2.0f);
+        }
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff1f2f4), c.x - d * 0.3f, c.y - d * 0.4f, juce::Colour (0xff60646b), c.x + d * 0.4f, c.y + d * 0.5f, true));
+        g.fillEllipse (c.x - d * 0.5f, c.y - d * 0.5f, d, d);   // bezel
+        const float j = d * 0.36f;
+        const auto glass = on ? colour : colour.darker (0.8f).withMultipliedSaturation (0.6f);
+        g.setGradientFill (juce::ColourGradient (glass.brighter (on ? 0.8f : 0.3f), c.x - j * 0.4f, c.y - j * 0.5f, glass.darker (0.5f), c.x + j * 0.6f, c.y + j * 0.7f, true));
+        g.fillEllipse (c.x - j, c.y - j, j * 2.0f, j * 2.0f);
+        g.setColour (juce::Colours::white.withAlpha (on ? 0.7f : 0.35f));
+        g.fillEllipse (c.x - j * 0.55f, c.y - j * 0.65f, j * 0.6f, j * 0.4f);
+        if (highlighted)
+        {
+            g.setColour (Palette::text.withAlpha (0.4f));
+            g.drawEllipse (c.x - d * 0.5f, c.y - d * 0.5f, d, d, 1.0f);
+        }
+    }
+
+private:
+    juce::Colour colour;
+};

@@ -1,6 +1,7 @@
-#include "PluginProcessor.h"
+﻿#include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "BinaryData.h"
+#include "NAM/dsp.h"
 
 namespace
 {
@@ -25,26 +26,32 @@ GuitarDriveProcessor::GuitarDriveProcessor()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
-    stereoPtr = raw (stereoId);
-    soloPtr = raw (soloId);
-    rightSamePtr = raw (rightSameId);
     inputPtr = raw (Params::inputKnob().id);
     outputPtr = raw (Params::outputKnob().id);
-    for (int s = 0; s < 2; ++s)
-        panPtr[s] = raw (paramId (s, panId));
-
-    // recorded cabinets and spring tank, embedded when this build has them (see tools/pack_irs.py)
-   #if GUITARDRIVE_IR_PACK
-    irPack = std::make_unique<IRPack> (BinaryData::irs_bin, (size_t) BinaryData::irs_binSize);
-    if (irPack->isValid())
-        irUpdater = std::make_unique<IRUpdater> (*this);
-   #endif
-
     metroOnPtr = raw (Params::metroOn);
     metroBpmPtr = raw (Params::metroBpm);
     metroBeatsPtr = raw (Params::metroBeats);
     metroNotePtr = raw (Params::metroNote);
     metroVolPtr = raw (Params::metroVol);
+
+    // recorded cabinets, spring tank and NAM captures, embedded when this build has them (see tools/pack_*.py)
+   #if GUITARDRIVE_IR_PACK
+    irPack = std::make_unique<IRPack> (BinaryData::irs_bin, (size_t) BinaryData::irs_binSize);
+    if (! irPack->isValid())
+        irPack.reset();
+   #endif
+   #if GUITARDRIVE_NAM_PACK
+    namPack = std::make_unique<NamPack> (BinaryData::nam_bin, (size_t) BinaryData::nam_binSize);
+    if (! namPack->isValid())
+        namPack.reset();
+   #endif
+    if (irPack != nullptr || namPack != nullptr)
+        loader = std::make_unique<Loader> (*this);
+}
+
+GuitarDriveProcessor::~GuitarDriveProcessor()
+{
+    loader.reset();   // stop loading before anything it uses goes away
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::createLayout()
@@ -52,55 +59,36 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
     using namespace juce;
     ParamList p;
 
-    for (int strip = 0; strip < 2; ++strip)
+    for (const auto& k : Params::stripKnobs())
+        addKnob (p, k.id, k.label, k);
+
+    // the three amp heads
+    for (int h = 0; h < Params::numHeads; ++h)
     {
-        const String prefix = strip == 0 ? "" : "Right ";
-
-        // amp
-        for (const auto& k : Params::stripKnobs())
-            addKnob (p, paramId (strip, k.id), prefix + k.label, k);
-
-        p.push_back (std::make_unique<AudioParameterFloat> (
-            ParameterID { paramId (strip, panId), 1 }, prefix + "Pan",
-            NormalisableRange<float> (-1.0f, 1.0f, 0.01f), strip == 0 ? -1.0f : 1.0f,
-            AudioParameterFloatAttributes()
-                .withStringFromValueFunction ([] (float v, int)
-                {
-                    const int amount = (int) std::lround (std::abs (v) * 100.0f);
-                    return amount == 0 ? String ("C") : String (v < 0.0f ? "L" : "R") + String (amount);
-                })
-                .withValueFromStringFunction ([] (const String& s)
-                {
-                    const auto t = s.trim().toUpperCase();
-                    if (t.startsWith ("L")) return -t.substring (1).getFloatValue() / 100.0f;
-                    if (t.startsWith ("R")) return  t.substring (1).getFloatValue() / 100.0f;
-                    return 0.0f;
-                })));
-
-        p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { paramId (strip, revTypeId), 1 }, prefix + "Reverb Type",
-                                                             StringArray { "Plate", "Spring" }, 0));
-        p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { paramId (strip, ampTypeId), 1 }, prefix + "Amp Model",
-                                                             StringArray { "Fender", "Two-Rock", "Both" }, 0));
-
-        // pedals before the amp, and the effects after the equalizer
-        addSwitch (p, paramId (strip, Params::wahOn), prefix + "Wah On", false);
-        addKnob (p, paramId (strip, Params::wahPosKnob().id), prefix + "Wah Position", Params::wahPosKnob());
-
-        const std::vector<Params::PedalDef> wahAuto { Params::wahAutoPedal() };
-        for (const auto* pedals : { &wahAuto, &Params::prePedals(), &Params::postPedals() })
-            for (const auto& pedal : *pedals)
-            {
-                addSwitch (p, paramId (strip, pedal.onId), prefix + pedal.title + " On", false);
-                for (const auto& k : pedal.knobs)
-                    addKnob (p, paramId (strip, k.id), prefix + pedal.title + " " + k.label, k);
-            }
-
-        // equalizer
-        addSwitch (p, paramId (strip, Params::eqOn), prefix + "EQ On", true);
-        for (int b = 0; b < Params::numEqBands; ++b)
-            addKnob (p, paramId (strip, Params::eqId (b)), prefix + "EQ " + Params::eqLabel (b),
-                     { Params::eqId (b), Params::eqLabel (b), -12.0f, 12.0f, 0.0f, 0.1f, " dB", 1 });
+        const String title (Params::headTitle (h));
+        addSwitch (p, Params::headId (h, "on"), title + " On", true);
+        for (const auto& k : Params::headKnobs (h))
+            addKnob (p, Params::headId (h, k.id), title + " " + String (k.label).toLowerCase(), k);
     }
+
+    // pedals before the amps, and the effects after the equalizer
+    addSwitch (p, Params::wahOn, "Wah On", false);
+    addKnob (p, Params::wahPosKnob().id, "Wah Position", Params::wahPosKnob());
+
+    const std::vector<Params::PedalDef> wahAuto { Params::wahAutoPedal() };
+    for (const auto* pedals : { &wahAuto, &Params::prePedals(), &Params::postPedals() })
+        for (const auto& pedal : *pedals)
+        {
+            addSwitch (p, pedal.onId, String (pedal.title) + " On", false);
+            for (const auto& k : pedal.knobs)
+                addKnob (p, k.id, String (pedal.title) + " " + k.label, k);
+        }
+
+    // equalizer
+    addSwitch (p, Params::eqOn, "EQ On", true);
+    for (int b = 0; b < Params::numEqBands; ++b)
+        addKnob (p, Params::eqId (b), "EQ " + String (Params::eqLabel (b)),
+                 { Params::eqId (b), Params::eqLabel (b), -12.0f, 12.0f, 0.0f, 0.1f, " dB", 1 });
 
     addKnob (p, Params::inputKnob().id, "Input", Params::inputKnob());
     addKnob (p, Params::outputKnob().id, "Output", Params::outputKnob());
@@ -111,99 +99,156 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
     p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { Params::metroNote, 1 }, "Metronome Note Value",
                                                          StringArray { "2", "4", "8", "16" }, 1));
     addKnob (p, Params::metroVol, "Metronome Volume", { Params::metroVol, "VOL", 0.0f, 10.0f, 5.0f, 0.01f });
-
-    addSwitch (p, stereoId, "Stereo Mode", false);
-    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { soloId, 1 }, "Solo",
-                                                         StringArray { "Off", "Left", "Right" }, 0));
-    addSwitch (p, rightSameId, "Right Uses Input 1", true);
     return { p.begin(), p.end() };
 }
 
-// ---------------------------------------------------------------- recorded IRs
+// ---------------------------------------------------------------- captures
 
-GuitarDriveProcessor::IRUpdater::IRUpdater (GuitarDriveProcessor& p) : juce::Thread ("IR updater"), owner (p)
+int GuitarDriveProcessor::dumbleIndexFor (float knob) const
+{
+    const int n = namPack != nullptr ? namPack->count (NamPack::dumble) : 0;
+    return n <= 1 ? 0 : juce::jlimit (0, n - 1, (int) std::lround (knob / 10.0f * (float) (n - 1)));
+}
+
+int GuitarDriveProcessor::ts9IndexFor (float driveKnob) const
+{
+    // the capture whose drive setting is nearest the DRIVE knob
+    const int n = namPack != nullptr ? namPack->count (NamPack::ts9) : 0;
+    int best = 0;
+    for (int i = 1; i < n; ++i)
+        if (std::abs (namPack->order (NamPack::ts9, i) - driveKnob) < std::abs (namPack->order (NamPack::ts9, best) - driveKnob))
+            best = i;
+    return best;
+}
+
+juce::String GuitarDriveProcessor::dumbleVoiceName (float knob) const
+{
+    if (! hasDumble())
+        return {};
+    return namPack->name (NamPack::dumble, dumbleIndexFor (knob)).replace ("_", " ");
+}
+
+juce::String GuitarDriveProcessor::ts9CaptureName (float driveKnob) const
+{
+    return hasTs9() ? namPack->name (NamPack::ts9, ts9IndexFor (driveKnob)) : juce::String();
+}
+
+GuitarDriveProcessor::Loader::Loader (GuitarDriveProcessor& p) : juce::Thread ("IR and capture loader"), owner (p)
 {
     startThread (juce::Thread::Priority::low);
 }
 
-GuitarDriveProcessor::IRUpdater::~IRUpdater()
+GuitarDriveProcessor::Loader::~Loader()
 {
-    stopThread (3000);
+    stopThread (10000);
 }
 
-void GuitarDriveProcessor::IRUpdater::run()
+void GuitarDriveProcessor::Loader::run()
 {
-    struct Seen { int prepareCount = -1; float mic = -1.0f; int dwell = -1, tone = -1; };
-    std::array<Seen, 2> seen;
+    int lastPrepare = -1, lastDwell = -1, lastTone = -1, lastDumble = -1, lastTs9 = -1;
+    std::array<float, Params::numHeads> lastMic { -1.0f, -1.0f, -1.0f };
+    auto& strip = owner.strip;
 
     while (! threadShouldExit())
     {
-        for (int s = 0; s < 2; ++s)
+        const int prepared = strip.getPrepareCount();
+        if (prepared > 0)   // nothing to do before the first prepareToPlay
         {
-            auto& strip = owner.strips[s];
-            auto& last = seen[(size_t) s];
-            const float mic = owner.raw (paramId (s, "cab_mic"))->load();
-            const int dwell = (int) std::lround (owner.raw (paramId (s, "rev_dwell"))->load());
-            const int tone = (int) std::lround (owner.raw (paramId (s, "rev_tone"))->load());
-            const int prepared = strip.getPrepareCount();
-            const bool fresh = prepared != last.prepareCount;   // prepare() put the built-in IRs back
+            const bool fresh = prepared != lastPrepare;   // prepare() put the built-in IRs back and cleared the captures
+            lastPrepare = prepared;
 
-            if (fresh || std::abs (mic - last.mic) > 0.02f)
-                for (int model = 0; model < 2; ++model)
+            if (owner.irPack != nullptr)
+            {
+                for (int h = 0; h < Params::numHeads; ++h)
+                {
+                    const float mic = owner.raw (Params::headId (h, "mic"))->load();
+                    if (fresh || std::abs (mic - lastMic[(size_t) h]) > 0.02f)
+                    {
+                        juce::AudioBuffer<float> ir;
+                        double rate = 0.0;
+                        // the Dumble plays through the Two-Rock 2x12
+                        if (owner.irPack->cabinet (h == 0 ? 0 : 1, mic, ir, rate))
+                            strip.postIR (h, std::move (ir), rate);
+                        lastMic[(size_t) h] = mic;
+                    }
+                }
+                const int dwell = (int) std::lround (owner.raw ("rev_dwell")->load());
+                const int tone = (int) std::lround (owner.raw ("rev_tone")->load());
+                if (fresh || dwell != lastDwell || tone != lastTone)
                 {
                     juce::AudioBuffer<float> ir;
                     double rate = 0.0;
-                    if (owner.irPack->cabinet (model, mic, ir, rate))
-                        strip.postIR (model, std::move (ir), rate);
+                    if (owner.irPack->springTank (dwell, tone, ir, rate))
+                        strip.postIR (ChannelStrip::springTank, std::move (ir), rate);
+                    lastDwell = dwell;
+                    lastTone = tone;
                 }
-            if (fresh || dwell != last.dwell || tone != last.tone)
-            {
-                juce::AudioBuffer<float> ir;
-                double rate = 0.0;
-                if (owner.irPack->springTank (dwell, tone, ir, rate))
-                    strip.postIR (ChannelStrip::springTank, std::move (ir), rate);
             }
-            last = { prepared, mic, dwell, tone };
-            strip.collectGarbage();
+
+            if (owner.namPack != nullptr)
+            {
+                const auto loadInto = [&] (NamPlayer& player, int group, int index)
+                {
+                    if (auto model = owner.namPack->load (group, index, strip.getSampleRate(), strip.getMaxBlockSize()))
+                    {
+                        float inGain = 1.0f, outGain = 1.0f;
+                        namLevels (*model, inGain, outGain);
+                        player.post (std::move (model), inGain, outGain);
+                    }
+                };
+                const int dumble = owner.dumbleIndexFor (owner.raw (Params::headId (2, "voice"))->load());
+                if (fresh || dumble != lastDumble)
+                {
+                    loadInto (strip.dumblePlayer(), NamPack::dumble, dumble);
+                    lastDumble = dumble;
+                }
+                const int ts9 = owner.ts9IndexFor (owner.raw ("od_drive")->load());
+                if (owner.hasTs9() && (fresh || ts9 != lastTs9))
+                {
+                    loadInto (strip.ts9Player(), NamPack::ts9, ts9);
+                    lastTs9 = ts9;
+                }
+            }
         }
+        strip.collectGarbage();
         wait (40);
     }
 }
 
-ChannelStrip::Params GuitarDriveProcessor::paramsFor (int strip) const
+ChannelStrip::Params GuitarDriveProcessor::stripParams() const
 {
-    auto own = [this, strip] (const char* base) { return raw (paramId (strip, base)); };
-
     ChannelStrip::Params p;
-    p.gate = own ("gate");
-    p.trans = own ("trans");
-    p.gain = own ("gain");
-    p.warmth = own ("warmth");
-    p.bass = own ("bass");
-    p.mid = own ("mid");
-    p.treble = own ("treble");
-    p.reverb = own ("reverb");
-    p.master = own ("master");
-    p.revType = own (revTypeId);
-    p.ampType = own (ampTypeId);
+    p.gate = raw ("gate");
+    p.trans = raw ("trans");
+    p.reverb = raw ("reverb");
+    for (int h = 0; h < Params::numHeads; ++h)
+    {
+        auto& hp = p.heads[(size_t) h];
+        hp.on = raw (Params::headId (h, "on"));
+        hp.volume = raw (Params::headId (h, "volume"));
+        hp.treble = raw (Params::headId (h, "treble"));
+        hp.mid = raw (Params::headId (h, "mid"));
+        hp.bass = raw (Params::headId (h, "bass"));
+        hp.master = raw (Params::headId (h, "master"));
+    }
 
-    p.wahOn = own ("wah_on");   p.wahAuto = own ("wah_auto");   p.wahPos = own ("wah_pos");
-    p.wahSens = own ("wah_sens");   p.wahQ = own ("wah_q");
-    p.compOn = own ("comp_on");   p.compSustain = own ("comp_sustain");   p.compAttack = own ("comp_attack");
-    p.compLevel = own ("comp_level");
-    p.tsOn = own ("ts_on");   p.tsDrive = own ("ts_drive");   p.tsTone = own ("ts_tone");   p.tsLevel = own ("ts_level");
-    p.odOn = own ("od_on");   p.odDrive = own ("od_drive");   p.odTone = own ("od_tone");   p.odLevel = own ("od_level");
+    p.wahOn = raw ("wah_on");   p.wahAuto = raw ("wah_auto");   p.wahPos = raw ("wah_pos");
+    p.wahSens = raw ("wah_sens");   p.wahQ = raw ("wah_q");
+    p.compOn = raw ("comp_on");   p.compSustain = raw ("comp_sustain");   p.compAttack = raw ("comp_attack");
+    p.compLevel = raw ("comp_level");
+    p.tsOn = raw ("ts_on");   p.tsDrive = raw ("ts_drive");   p.tsTone = raw ("ts_tone");   p.tsLevel = raw ("ts_level");
+    p.odOn = raw ("od_on");   p.odDrive = raw ("od_drive");   p.odTone = raw ("od_tone");   p.odLevel = raw ("od_level");
 
-    p.eqOn = own (Params::eqOn);
+    p.eqOn = raw (Params::eqOn);
     for (int b = 0; b < Params::numEqBands; ++b)
-        p.eq[(size_t) b] = own (Params::eqId (b));
+        p.eq[(size_t) b] = raw (Params::eqId (b));
 
     auto& q = p.post;
-    q.phOn = own ("ph_on");   q.phRate = own ("ph_rate");   q.phDepth = own ("ph_depth");   q.phFb = own ("ph_fb");   q.phMix = own ("ph_mix");
-    q.chOn = own ("ch_on");   q.chRate = own ("ch_rate");   q.chDepth = own ("ch_depth");   q.chMix = own ("ch_mix");
-    q.trOn = own ("tr_on");   q.trRate = own ("tr_rate");   q.trDepth = own ("tr_depth");
-    q.dlOn = own ("dl_on");   q.dlTime = own ("dl_time");   q.dlFb = own ("dl_fb");   q.dlTone = own ("dl_tone");   q.dlMix = own ("dl_mix");
-    q.rvOn = own ("rv_on");   q.rvSize = own ("rv_size");   q.rvDamp = own ("rv_damp");   q.rvMix = own ("rv_mix");
+    q.phOn = raw ("ph_on");   q.phRate = raw ("ph_rate");   q.phDepth = raw ("ph_depth");   q.phFb = raw ("ph_fb");   q.phMix = raw ("ph_mix");
+    q.chOn = raw ("ch_on");   q.chRate = raw ("ch_rate");   q.chDepth = raw ("ch_depth");   q.chMix = raw ("ch_mix");
+    q.trOn = raw ("tr_on");   q.trRate = raw ("tr_rate");   q.trDepth = raw ("tr_depth");
+    q.dlOn = raw ("dl_on");   q.dlTime = raw ("dl_time");   q.dlFb = raw ("dl_fb");   q.dlTone = raw ("dl_tone");   q.dlMix = raw ("dl_mix");
+    q.rvOn = raw ("rv_on");   q.rvSize = raw ("rv_size");   q.rvDamp = raw ("rv_damp");   q.rvMix = raw ("rv_mix");
     return p;
 }
 
@@ -218,15 +263,11 @@ bool GuitarDriveProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 void GuitarDriveProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
-    for (int s = 0; s < 2; ++s)
-    {
-        strips[s].setParams (paramsFor (s));
-        strips[s].prepare (sampleRate, samplesPerBlock);
-    }
-    setLatencySamples (strips[0].getLatencySamples());
+    strip.setParams (stripParams());
+    strip.prepare (sampleRate, samplesPerBlock);
+    setLatencySamples (strip.getLatencySamples());
 
     metronome.prepare (sampleRate);
-
     scratch.setSize (numScratch, samplesPerBlock, false, false, true);
 
     inputGain.reset (sampleRate, 0.02);
@@ -235,17 +276,6 @@ void GuitarDriveProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     outputGain.setCurrentAndTargetValue (fx::dbToGain (outputPtr->load()));
     muteSmooth.reset (sampleRate, 0.02);
     muteSmooth.setCurrentAndTargetValue (1.0f);
-    switchFade.reset (sampleRate, 0.02);
-    switchFade.setCurrentAndTargetValue (1.0f);
-    for (int c = 0; c < 2; ++c)
-    {
-        chanGain[c].reset (sampleRate, 0.02);
-        chanCenter[c].reset (sampleRate, 0.02);
-        chanPan[c].reset (sampleRate, 0.03);
-    }
-    wasStereo = stereoPtr->load() > 0.5f;
-    if (wasStereo)
-        strips[1].reset();
 
     decim = std::max (1, (int) std::lround (sampleRate / 24000.0));   // analyse at about 24 kHz
     tunerRate.store ((float) (sampleRate / decim));
@@ -315,144 +345,52 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     }
 
     ensureScratch (n);
-    const bool stereo = stereoPtr->load() > 0.5f;
 
-    // Take copies of the inputs: the output is written back into the same buffer.
-    float* left = scratch.getWritePointer (in0);
-    float* right = scratch.getWritePointer (in1);
-    juce::FloatVectorOperations::copy (left, buffer.getReadPointer (0), n);
-    // With one guitar on input 1 the right channel would otherwise listen to an empty input 2 and stay silent,
-    // so by default both channels take input 1 (two independent chains from the same guitar).
-    const bool rightFromLeft = rightSamePtr->load() > 0.5f;
-    juce::FloatVectorOperations::copy (right, buffer.getReadPointer (numIn > 1 && ! rightFromLeft ? 1 : 0), n);
+    // the guitar on input 1; the output is written back into the same buffer, so take a copy first
+    float* guitar = scratch.getWritePointer (inMono);
+    juce::FloatVectorOperations::copy (guitar, buffer.getReadPointer (0), n);
 
-    // Input volume: plain gain, before everything else.
     inputGain.setTargetValue (fx::dbToGain (inputPtr->load()));
     for (int i = 0; i < n; ++i)
+        guitar[i] *= inputGain.getNextValue();
     {
-        const float g = inputGain.getNextValue();
-        left[i] *= g;
-        right[i] *= g;
-    }
-
-    {
-        const auto range = juce::FloatVectorOperations::findMinAndMax (left, n);
+        const auto range = juce::FloatVectorOperations::findMinAndMax (guitar, n);
         inputPeak.store (std::max (inputPeak.load(), std::max (std::abs (range.getStart()), std::abs (range.getEnd()))));
     }
 
     const bool tuning = tunerActive.load();
     if (tuning)
-    {
-        // In stereo mode listen to whichever input is louder.
-        const float* source = left;
-        if (stereo)
-        {
-            const float e0 = juce::FloatVectorOperations::findMaximum (left, n);
-            const float e1 = juce::FloatVectorOperations::findMaximum (right, n);
-            source = e1 > e0 ? right : left;
-        }
-        feedTuner (source, n);
-    }
+        feedTuner (guitar, n);
     else
-    {
         tunerWasActive = false;
-    }
 
-    if (stereo != wasStereo)
-    {
-        wasStereo = stereo;
-        if (stereo)
-        {
-            strips[1].reset();
-            for (int c = 0; c < 2; ++c)
-            {
-                chanGain[c].setCurrentAndTargetValue (1.0f);
-                chanCenter[c].setCurrentAndTargetValue (0.0f);
-                chanPan[c].setCurrentAndTargetValue (panPtr[c]->load());
-            }
-        }
-        switchFade.setCurrentAndTargetValue (0.0f);   // fade the new mode in instead of clicking
-        switchFade.setTargetValue (1.0f);
-    }
+    float* l = scratch.getWritePointer (outL);
+    float* r = scratch.getWritePointer (outR);
+    strip.process (guitar, l, r, n);
 
-    float* s0L = scratch.getWritePointer (out0L);
-    float* s0R = scratch.getWritePointer (out0R);
-    float* s1L = scratch.getWritePointer (out1L);
-    float* s1R = scratch.getWritePointer (out1R);
-
-    // each channel runs its whole chain: pedals, amp, equalizer and effects
-    strips[0].process (left, s0L, s0R, n);
-    if (stereo)
-        strips[1].process (right, s1L, s1R, n);
-
-    // Solo / mute are linked: soloing one side mutes the other. A soloed side is sent to both
-    // speakers (mono, ignoring its pan); with nothing soloed each side sits at its pan position.
-    const int solo = stereo ? (int) std::lround (soloPtr->load()) : 0;
-    for (int c = 0; c < 2; ++c)
-    {
-        chanGain[c].setTargetValue (solo == 0 || solo == c + 1 ? 1.0f : 0.0f);
-        chanCenter[c].setTargetValue (solo == c + 1 ? 1.0f : 0.0f);
-        chanPan[c].setTargetValue (panPtr[c]->load());
-    }
-
-    float* mixLp = scratch.getWritePointer (mixL);
-    float* mixRp = scratch.getWritePointer (mixR);
-    const float* sL[2] = { s0L, s1L };
-    const float* sR[2] = { s0R, s1R };
-    constexpr float quarterPi = juce::MathConstants<float>::pi * 0.25f;
-
-    for (int i = 0; i < n; ++i)
-    {
-        float l, r;
-
-        if (! stereo)
-        {
-            l = s0L[i];
-            r = s0R[i];
-        }
-        else
-        {
-            l = r = 0.0f;
-            for (int c = 0; c < 2; ++c)
-            {
-                const float g = chanGain[c].getNextValue();
-                const float center = chanCenter[c].getNextValue();
-                const float theta = (chanPan[c].getNextValue() + 1.0f) * quarterPi;   // equal-power pan: hard side = unity
-                const float panL = std::cos (theta);
-                const float panR = std::sin (theta);
-                l += g * (panL + center * (1.0f - panL)) * sL[c][i];
-                r += g * (panR + center * (1.0f - panR)) * sR[c][i];
-            }
-        }
-        mixLp[i] = l;
-        mixRp[i] = r;
-    }
-
-    metronome.process (mixLp, mixRp, n, metroOnPtr->load() > 0.5f, metroBpmPtr->load(),
+    metronome.process (l, r, n, metroOnPtr->load() > 0.5f, metroBpmPtr->load(),
                        (int) std::lround (metroBeatsPtr->load()), (int) std::lround (metroNotePtr->load()), metroVolPtr->load());
 
-    // Output volume, tuner mute and mode fade, then out.
+    // output volume and tuner mute, then out
     muteSmooth.setTargetValue (tuning ? 0.0f : 1.0f);
     outputGain.setTargetValue (fx::dbToGain (outputPtr->load()));
 
-    float* outL = buffer.getWritePointer (0);
-    float* outR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
+    float* dstL = buffer.getWritePointer (0);
+    float* dstR = numOut > 1 ? buffer.getWritePointer (1) : nullptr;
     float outPeak = 0.0f;
     for (int i = 0; i < n; ++i)
     {
-        const float gain = switchFade.getNextValue() * muteSmooth.getNextValue() * outputGain.getNextValue();
-        const float l = mixLp[i] * gain;
-        const float r = mixRp[i] * gain;
-        outPeak = std::max (outPeak, std::max (std::abs (l), std::abs (r)));
-
-        if (outR != nullptr)
+        const float gain = muteSmooth.getNextValue() * outputGain.getNextValue();
+        const float a = l[i] * gain, b = r[i] * gain;
+        outPeak = std::max (outPeak, std::max (std::abs (a), std::abs (b)));
+        if (dstR != nullptr)
         {
-            outL[i] = l;
-            outR[i] = r;
+            dstL[i] = a;
+            dstR[i] = b;
         }
         else
         {
-            outL[i] = 0.5f * (l + r);
+            dstL[i] = 0.5f * (a + b);
         }
     }
     outputPeak.store (std::max (outputPeak.load(), outPeak));

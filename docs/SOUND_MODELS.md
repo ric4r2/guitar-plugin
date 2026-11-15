@@ -1,11 +1,37 @@
 # How the amp and pedals are modelled
 
+## The rig: a reverb unit feeding three amps
+
+Like John Mayer's setup, the signal goes:
+
+1. The pedals.
+2. A **Fender spring reverb unit** (DWELL, TONE, MIX; the recorded tank when built in). It sits between the pedals and the amps, like a real 6G15.
+3. **Three amp heads in parallel**, each with its own controls, power jewel and speaker cabinet:
+
+| Head | What it plays | Cabinet |
+|---|---|---|
+| Fender | Twin Reverb, from its circuit (below) | Twin 2x12 recording (or built-in) |
+| Two-Rock | Two-Rock style clean, from its circuit (below) | Two-Rock 2x12 65B recording (or built-in) |
+| Dumble | NAM captures of a Dumble Overdrive Special #102 (personal builds) | the Two-Rock 2x12 |
+
+Turning heads on or off keeps the loudness about the same: each head comes in at 1/sqrt(number playing).
+
+The Dumble's controls:
+
+* **VOICE** walks through 66 captures, ordered by the gain each one reports, from CLN_KLEAN (the cleanest) to the high-gain overdrive ones. The display shows the capture's name.
+* **VOLUME** drives the capture by up to 12 dB either way.
+* **TREBLE / MIDDLE / BASS** shape it further (5 = as captured).
+
+The overdrive pedal becomes a **TS9** when its captures are built in. DRIVE picks the capture nearest the knob (Drive 1, 3, 6 or 9), TONE tilts it and LEVEL sets the output.
+
+NAM captures play through the official Neural Amp Modeler engine (NeuralAmpModelerCore, MIT license, with Eigen, MPL-2.0), which the build downloads. `tools/pack_nam.py <folder>` packs the TONE3000 zips into the git-ignored `Assets/private-ir/nam.bin`. TONE3000's license allows using the captures but not sharing them, so don't share a build that contains them. The captures expect 48 kHz: run the interface at 48 kHz for them to sound exactly as captured.
+
 The goal is a real John Mayer / SRV style clean to edge-of-breakup sound. This page explains what is simulated from
 real circuits, what is still an approximation, and where every number comes from.
 
 ## Amps: Fender or Two-Rock
 
-Pick the amp with the three-way **AMP** selector (like a guitar's pickup switch): **FENDER**, **BOTH** or
+The Fender and Two-Rock heads were picked with a three-way selector in earlier versions; now each has its own power switch. Earlier note: pick the amp with the three-way **AMP** selector (like a guitar's pickup switch): **FENDER**, **BOTH** or
 **TWO-ROCK**. Each amp has its own speaker cabinet. BOTH runs the two complete amps side by side (a dual-amp rig) and
 mixes their cabinets. An amp that is switched off doesn't run.
 

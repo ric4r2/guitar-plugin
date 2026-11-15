@@ -5,6 +5,7 @@
 #include "IRPack.h"
 #include "Effects.h"
 #include "Metronome.h"
+#include "NamCapture.h"
 #include "Params.h"
 #include "Presets.h"
 #include "Tuner.h"
@@ -13,6 +14,7 @@ class GuitarDriveProcessor : public juce::AudioProcessor
 {
 public:
     GuitarDriveProcessor();
+    ~GuitarDriveProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -36,16 +38,8 @@ public:
     void getStateInformation (juce::MemoryBlock&) override;
     void setStateInformation (const void*, int) override;
 
-    // Everything on a channel (amp knobs, pedals, EQ, effects) exists twice: strip 0 is the mono / left channel,
-    // strip 1 the right channel, whose parameter ids carry an "r_" prefix.
-    static constexpr const char* panId = "pan";            // -1 (left) .. +1 (right), stereo mode only
-    static constexpr const char* revTypeId = "revtype";    // 0 = plate (smooth), 1 = spring
-    static constexpr const char* ampTypeId = "amptype";    // 0 = Fender (Twin Reverb), 1 = Two-Rock, 2 = both side by side
-    static constexpr const char* stereoId = "stereo";      // false = mono (default), true = two channels
-    static constexpr const char* soloId = "solo";          // 0 = off, 1 = left soloed (right muted), 2 = right soloed (left muted)
-    static constexpr const char* rightSameId = "rightsame";   // stereo mode: true = right channel hears input 1 too, false = input 2
-
-    static juce::String paramId (int strip, const char* base) { return strip == 0 ? juce::String (base) : "r_" + juce::String (base); }
+    // The plugin has one channel; the strip argument is kept for the views that are built per channel.
+    static juce::String paramId (int, const char* base) { return juce::String (base); }
 
     // Tuner: while active the output is muted and the input is analysed.
     void setTunerActive (bool on) { tunerActive.store (on); }
@@ -54,6 +48,14 @@ public:
     bool getTunerFrame (float* dest, double& sampleRate) const;
 
     const Metronome& getMetronome() const { return metronome; }
+
+    // NAM captures built into this copy (personal builds only)
+    bool hasDumble() const { return namPack != nullptr && namPack->count (NamPack::dumble) > 0; }
+    bool hasTs9() const { return namPack != nullptr && namPack->count (NamPack::ts9) > 0; }
+    juce::String dumbleVoiceName (float knob) const;   // the capture the Dumble's VOICE knob points at
+    juce::String ts9CaptureName (float driveKnob) const;
+    int dumbleIndexFor (float knob) const;
+    int ts9IndexFor (float driveKnob) const;
 
     // block peaks for the level meters; the editor reads and clears them
     std::atomic<float> inputPeak { 0.0f }, outputPeak { 0.0f };
@@ -69,40 +71,34 @@ private:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     const std::atomic<float>* raw (const juce::String& id) const { return apvts.getRawParameterValue (id); }
-    ChannelStrip::Params paramsFor (int strip) const;
+    ChannelStrip::Params stripParams() const;
     void feedTuner (const float* mono, int n);
     void ensureScratch (int n);
 
-    // scratch channels
-    enum { in0, in1, out0L, out0R, out1L, out1R, mixL, mixR, numScratch };
+    enum { inMono, outL, outR, numScratch };
 
-    ChannelStrip strips[2];
+    ChannelStrip strip;
 
-    // recorded cabinets and spring tank (only in builds that embed them), kept up to date with the MIC, DWELL and
-    // TONE knobs by a background thread
-    struct IRUpdater : juce::Thread
+    // Recorded cabinets, spring tank and NAM captures (only in builds that embed them), kept in step with the MIC,
+    // DWELL, TONE, VOICE and TS9 DRIVE knobs by a background thread: loading never happens on the audio thread.
+    struct Loader : juce::Thread
     {
-        explicit IRUpdater (GuitarDriveProcessor& p);
-        ~IRUpdater() override;
+        explicit Loader (GuitarDriveProcessor& p);
+        ~Loader() override;
         void run() override;
         GuitarDriveProcessor& owner;
     };
     std::unique_ptr<IRPack> irPack;
-    std::unique_ptr<IRUpdater> irUpdater;   // declared after strips and irPack, so it stops before they go
+    std::unique_ptr<NamPack> namPack;
+    std::unique_ptr<Loader> loader;   // declared after strip and the packs, so it stops before they go
     Metronome metronome;
     juce::AudioBuffer<float> scratch { numScratch, 0 };
 
-    juce::SmoothedValue<float> inputGain, outputGain, muteSmooth, switchFade;
-    juce::SmoothedValue<float> chanGain[2], chanCenter[2], chanPan[2];
-    bool wasStereo = false;
+    juce::SmoothedValue<float> inputGain, outputGain, muteSmooth;
 
     // cached parameter pointers
-    const std::atomic<float>* stereoPtr = nullptr;
-    const std::atomic<float>* soloPtr = nullptr;
-    const std::atomic<float>* rightSamePtr = nullptr;
     const std::atomic<float>* inputPtr = nullptr;
     const std::atomic<float>* outputPtr = nullptr;
-    const std::atomic<float>* panPtr[2] = {};
     const std::atomic<float>* metroOnPtr = nullptr;
     const std::atomic<float>* metroBpmPtr = nullptr;
     const std::atomic<float>* metroBeatsPtr = nullptr;

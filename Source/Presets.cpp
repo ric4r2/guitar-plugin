@@ -158,15 +158,14 @@ void PresetManager::seedFactoryPresets()
     struct Factory { const char* name; std::vector<std::pair<const char*, float>> changes; };
     const std::vector<Factory> presets = {
         { "Init", {} },
-        // Two-Rock for headroom, light compression, spring reverb
-        { "Mayer Clean", { { "amptype", 1.0f }, { "comp_on", 1.0f }, { "comp_sustain", 3.5f }, { "comp_level", 5.5f },
-                           { "gain", 4.5f }, { "bass", 5.0f }, { "mid", 4.5f }, { "treble", 6.0f },
-                           { "reverb", 3.0f }, { "revtype", 1.0f } } },
-        // Tube Screamer with low drive and the level up, pushing a Deluxe at the edge of breakup
-        { "SRV Edge",    { { "ts_on", 1.0f }, { "ts_drive", 2.0f }, { "ts_tone", 6.0f }, { "ts_level", 8.0f },
-                           { "gain", 5.0f }, { "warmth", 4.0f }, { "bass", 5.5f }, { "mid", 5.5f }, { "treble", 5.5f },
-                           { "reverb", 2.5f }, { "revtype", 1.0f } } },
-        { "Deluxe Breakup", { { "gain", 6.5f }, { "warmth", 5.0f }, { "treble", 5.5f }, { "reverb", 2.5f }, { "revtype", 1.0f } } },
+        // three amps at once, like John Mayer: the Dumble's cleanest capture, the Two-Rock and the Twin, light compression
+        { "Mayer Trio",  { { "comp_on", 1.0f }, { "comp_sustain", 3.5f }, { "comp_level", 5.5f },
+                           { "dm_voice", 0.0f }, { "rk_treble", 6.0f }, { "fn_mid", 4.5f }, { "reverb", 3.0f } } },
+        // the Dumble alone, through the Two-Rock 2x12
+        { "Dumble Klean", { { "fn_on", 0.0f }, { "rk_on", 0.0f }, { "dm_voice", 0.0f }, { "reverb", 2.5f } } },
+        // Tube Screamer with low drive and the level up into the Twin
+        { "SRV Edge",    { { "rk_on", 0.0f }, { "dm_on", 0.0f }, { "ts_on", 1.0f }, { "ts_drive", 2.0f }, { "ts_tone", 6.0f },
+                           { "ts_level", 8.0f }, { "fn_volume", 6.0f }, { "fn_bass", 5.5f }, { "reverb", 2.5f } } },
     };
 
     for (const auto& preset : presets)
@@ -178,8 +177,8 @@ void PresetManager::seedFactoryPresets()
         for (auto* p : presetParameters())
         {
             float value = p->convertFrom0to1 (p->getDefaultValue());
-            for (const auto& change : preset.changes)   // applies to the right channel's copy too
-                if (p->paramID == change.first || p->paramID == "r_" + juce::String (change.first))
+            for (const auto& change : preset.changes)
+                if (p->paramID == change.first)
                     value = change.second;
 
             auto* e = xml.createNewChildElement ("PARAM");

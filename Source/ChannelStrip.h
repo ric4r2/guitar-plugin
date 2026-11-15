@@ -4,15 +4,14 @@
 #include "AmpModel.h"
 #include "CabinetIR.h"
 #include "Effects.h"
+#include "NamCapture.h"
 #include "Params.h"
-#include "PlateReverb.h"
 #include "SpringReverb.h"
 
-// One complete guitar signal path, one per channel:
-// gate -> transposer -> wah -> compressor -> tube screamer -> overdrive
-//      -> amp (12AX7 -> tone stack -> volume -> 12AX7 -> power amp) -> reverb -> speaker -> master
+// The whole guitar signal path:
+// gate -> transposer -> wah -> compressor -> tube screamer -> overdrive (TS9 captures when built in)
+//      -> Fender spring reverb unit -> three amp heads in parallel, each into its own cabinet
 //      -> equalizer -> phaser -> chorus -> tremolo -> delay -> digital reverb.
-// Mono mode uses one strip; stereo mode runs two, one per input channel, each with its own settings.
 class ChannelStrip
 {
 public:
@@ -42,20 +41,24 @@ public:
         const std::atomic<float>* rvMix = nullptr;
     };
 
+    // one amp head's controls
+    struct HeadPtrs
+    {
+        const std::atomic<float>* on = nullptr;
+        const std::atomic<float>* volume = nullptr;
+        const std::atomic<float>* treble = nullptr;
+        const std::atomic<float>* mid = nullptr;
+        const std::atomic<float>* bass = nullptr;
+        const std::atomic<float>* master = nullptr;
+    };
+
     struct Params
     {
-        // amp knobs
         const std::atomic<float>* gate = nullptr;
         const std::atomic<float>* trans = nullptr;
-        const std::atomic<float>* gain = nullptr;
-        const std::atomic<float>* warmth = nullptr;
-        const std::atomic<float>* bass = nullptr;
-        const std::atomic<float>* mid = nullptr;
-        const std::atomic<float>* treble = nullptr;
-        const std::atomic<float>* reverb = nullptr;
-        const std::atomic<float>* master = nullptr;
-        const std::atomic<float>* revType = nullptr;   // 0 = plate, 1 = spring
-        const std::atomic<float>* ampType = nullptr;   // 0 = Fender Twin Reverb, 1 = Two-Rock, 2 = both side by side
+        const std::atomic<float>* reverb = nullptr;   // the spring reverb unit's MIX
+
+        std::array<HeadPtrs, ::Params::numHeads> heads {};
 
         // pedals before the amp
         const std::atomic<float>* wahOn = nullptr;
@@ -82,34 +85,29 @@ public:
         PostPtrs post;
     };
 
-    ChannelStrip()
-    {
-        for (auto* box : { &inbox, &outbox })   // std::atomic is not zeroed for us before C++20
-            for (auto& p : *box)
-                p.store (nullptr);
-    }
-    ~ChannelStrip()
-    {
-        for (auto* box : { &inbox, &outbox })
-            for (auto& p : *box)
-                delete p.load();
-    }
+    ChannelStrip();
+    ~ChannelStrip();
 
     void setParams (const Params& p) { params = p; }
 
-    // Recorded impulse responses, handed over from another thread (they are picked up at the start of the next block).
-    // Target 0 / 1: the Fender / Two-Rock cabinet; 2: the spring tank (replaces the built-in spring from then on).
-    enum IRTarget { fenderCabinet = 0, twoRockCabinet = 1, springTank = 2, numIRTargets = 3 };
+    // Recorded impulse responses, handed over from another thread (picked up at the start of the next block).
+    enum IRTarget { fenderCabinet = 0, twoRockCabinet = 1, dumbleCabinet = 2, springTank = 3, numIRTargets = 4 };
     void postIR (int target, juce::AudioBuffer<float>&& ir, double irSampleRate);
-    void collectGarbage();   // call from the thread that posts: frees IRs the audio thread has finished with
+    void collectGarbage();   // call from the thread that posts: frees what the audio thread has finished with
     // counts prepare() calls: anything posted before the latest prepare() has to be posted again
     int getPrepareCount() const { return prepareCount.load(); }
+    double getSampleRate() const { return sr; }
+    int getMaxBlockSize() const { return maxBlock; }
 
-    // the cabinets load on a background thread; true once both are in use
+    // NAM captures: the Dumble head, and the TS9 that replaces the built-in overdrive once it has a capture
+    NamPlayer& dumblePlayer() { return dumble.player; }
+    NamPlayer& ts9Player() { return ts9; }
+
+    // the cabinets load on a background thread; true once all are in use
     bool cabinetsReady() const;
     void prepare (double sampleRate, int maxBlockSize);
     void reset();
-    int getLatencySamples() const { return (int) amps[0].oversampling.getLatencyInSamples(); }
+    int getLatencySamples() const { return (int) circuit[0].oversampling.getLatencyInSamples(); }
 
     // `in` may alias `outL`. Writes the finished stereo signal to outL and outR (n samples each).
     void process (const float* in, float* outL, float* outR, int n);
@@ -128,45 +126,65 @@ private:
     fx::Compressor comp;
     fx::TubeScreamer tubeScreamer;
     fx::Overdrive overdrive;
+    NamPlayer ts9;
+    juce::dsp::IIR::Filter<float> ts9Tone;
+    float lastTs9Tone = -1.0f;
     fx::PedalSwitch wahSwitch, compSwitch, tsSwitch, odSwitch;
     std::vector<float> dryScratch;
 
-    // the amp, modelled on its circuit (see AmpModel.h): all of it runs at 4x the sample rate except the speaker
-    // Two complete amps, each with its own cabinet: 0 the Fender (Twin Reverb), 1 the Two-Rock. The selector plays
-    // one of them or both side by side (a dual-amp rig); an amp that is switched off doesn't run.
-    struct AmpCore
+    // Fender (0) and Two-Rock (1) heads, modelled on their circuits (AmpModel.h), at 4x the sample rate
+    struct CircuitHead
     {
         amp::ToneStack toneStack;
         amp::PowerAmp powerAmp;
-        juce::dsp::Oversampling<float> oversampling { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };   // 4x
-        juce::SmoothedValue<float> volume, drive, mix;
+        juce::dsp::Oversampling<float> oversampling { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
+        juce::SmoothedValue<float> volume, drive;
         float baseDrive = 1.0f / 30.0f, outputTrim = 1.0f, preampPad = 1.0f, coupleState = 0.0f;
         float brightG = 0.0f, brightS = 0.0f;   // 47pF bright cap across the volume pot
         float tightG = 0.0f, tightS = 0.0f;     // low cut in front of the second stage
-        std::vector<float> buffer, mixGain, cabL, cabR;
+    };
+    std::array<CircuitHead, 2> circuit;
+    void configureCircuit (int index);
+    void runCircuit (int index, float* x, int n);
+
+    // Dumble (2): a NAM capture, then its own treble / middle / bass
+    struct NamHead
+    {
+        NamPlayer player;
+        juce::dsp::IIR::Filter<float> bassF, midF, trebleF;
+        float lastBass = -1.0f, lastMid = -1.0f, lastTreble = -1.0f;
+        juce::SmoothedValue<float> volume;
+    };
+    NamHead dumble;
+    void runDumble (float* x, int n);
+
+    // per head: on/off fade, master level, its output buffer
+    struct HeadMix
+    {
+        juce::SmoothedValue<float> gain;
+        std::vector<float> buffer;
         bool running = false;
     };
-    std::array<AmpCore, 2> amps;
-    void configureAmp (int index);
-    void resetAmp (int index);
-    int ampSelection() const;   // 0 Fender, 1 Two-Rock, 2 both
+    std::array<HeadMix, ::Params::numHeads> mix;
+    void resetHead (int index);
+
     amp::TriodeStage v1a, v1b;
-    std::array<juce::dsp::Convolution, 2> cabinets;            // Fender and Two-Rock speaker cabinets
+    float coupleCoef = 0.0f;   // coupling capacitor after V1B
+
+    std::array<juce::dsp::Convolution, ::Params::numHeads> cabinets;   // each head's speaker cabinet
     juce::dsp::Convolution springConv { juce::dsp::Convolution::NonUniform { 512 } };   // recorded spring tank
     bool useSpringIR = false;
     struct PendingIR { juce::AudioBuffer<float> buffer; double rate = 0.0; };
     std::array<std::atomic<PendingIR*>, numIRTargets> inbox {}, outbox {};
     std::atomic<int> prepareCount { 0 };
     void takeNewIRs();
-    std::vector<float> sendBuf, plateL, plateR, springL, springR;
-    float coupleCoef = 0.0f;                                   // coupling capacitor after V1B
-    float sendHp1 = 0.0f, sendHp2 = 0.0f, sendHpCoef = 0.0f;   // keeps low-mids out of the reverb
 
+    // the spring reverb unit
     fx::ReverbDuck reverbDuck;
     SpringReverb spring;
-    PlateReverb plate;
-    juce::SmoothedValue<float> reverbSmooth, masterSmooth, reverbTypeSmooth;
-    std::vector<float> ampIn, mixDry, wetL, wetR, masterGain;
+    juce::SmoothedValue<float> reverbSmooth;
+    float sendHp1 = 0.0f, sendHp2 = 0.0f, sendHpCoef = 0.0f;   // keeps low-mids out of the tank
+    std::vector<float> sendBuf, wetBuf, spareR, ampIn;
 
     fx::GraphicEq eq;
     fx::PedalSwitch eqSwitch;

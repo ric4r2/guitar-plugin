@@ -8,6 +8,8 @@
 #include "AmpModel.h"
 #include "CabinetIR.h"
 #include "IRPack.h"
+#include "NamCapture.h"
+#include "NAM/dsp.h"
 #include <thread>
 #include "ChannelStrip.h"
 #include "Effects.h"
@@ -498,7 +500,7 @@ namespace
         {
             std::vector<std::unique_ptr<juce::RangedAudioParameter>> p;
             p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "gain", 1 }, "Gain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f));
-            p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "r_gain", 1 }, "R Gain", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f));
+            p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "fn_volume", 1 }, "Fender Volume", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f));
             p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "ts_drive", 1 }, "Drive", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 2.5f));
             p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "ts_on", 1 }, "TS", false));
             p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "metro_on", 1 }, "Metro", false));
@@ -525,12 +527,12 @@ namespace
 
             const auto factory = pm.names();
             check ("factory presets are created on first run",
-                   factory.contains ("Init") && factory.contains ("Mayer Clean") && factory.contains ("SRV Edge"), factory.joinIntoString (", ").toRawUTF8());
+                   factory.contains ("Init") && factory.contains ("Mayer Trio") && factory.contains ("SRV Edge"), factory.joinIntoString (", ").toRawUTF8());
 
             pm.load ("SRV Edge");
-            std::snprintf (buf, sizeof buf, "ts_on %.0f, ts_drive %.1f, gain right copy %.1f", proc.get ("ts_on"), proc.get ("ts_drive"), proc.get ("r_gain"));
-            check ("loading a preset applies its values (both channels)", proc.get ("ts_on") > 0.5f && std::abs (proc.get ("ts_drive") - 2.0f) < 0.05f
-                                                                              && std::abs (proc.get ("r_gain") - 5.0f) < 0.05f, buf);
+            std::snprintf (buf, sizeof buf, "ts_on %.0f, ts_drive %.1f, fender volume %.1f", proc.get ("ts_on"), proc.get ("ts_drive"), proc.get ("fn_volume"));
+            check ("loading a preset applies its values", proc.get ("ts_on") > 0.5f && std::abs (proc.get ("ts_drive") - 2.0f) < 0.05f
+                                                           && std::abs (proc.get ("fn_volume") - 6.0f) < 0.05f, buf);
             check ("a freshly loaded preset is not marked modified", pm.currentName() == "SRV Edge" && ! pm.isDirty(), "no asterisk");
 
             proc.set ("gain", 8.0f);
@@ -573,7 +575,17 @@ namespace
 
     struct StripFixture
     {
-        std::atomic<float> gate { 0 }, trans { 0 }, gain { 5 }, warmth { 3 }, bass { 5 }, mid { 5 }, treble { 5 }, reverb { 2.5f }, master { 8 }, revType { 0 }, ampType { 0 };
+        std::atomic<float> gate { 0 }, trans { 0 }, reverb { 2.5f };
+        struct HeadFix { std::atomic<float> on { 0 }, volume { 5 }, treble { 5 }, mid { 5 }, bass { 5 }, master { 8 }; };
+        std::array<HeadFix, Params::numHeads> heads;
+        StripFixture() { heads[0].on = 1.0f; }   // the Fender alone unless a test says otherwise
+        // 0 the Fender alone, 1 the Two-Rock alone, 2 both, all at one volume
+        void amp (int model, float volume)
+        {
+            heads[0].on = model != 1 ? 1.0f : 0.0f;
+            heads[1].on = model != 0 ? 1.0f : 0.0f;
+            heads[0].volume = heads[1].volume = volume;
+        }
         std::atomic<float> wahOn { 0 }, wahAuto { 0 }, wahPos { 5 }, wahSens { 5 }, wahQ { 5 };
         std::atomic<float> compOn { 0 }, compSustain { 3 }, compAttack { 4 }, compLevel { 5 };
         std::atomic<float> tsOn { 0 }, tsDrive { 2.5f }, tsTone { 5.5f }, tsLevel { 6.5f };
@@ -593,8 +605,13 @@ namespace
             q.dlTime = &delayTime;
             q.dlFb = q.dlTone = q.dlMix = &five;
             q.rvSize = q.rvDamp = q.rvMix = &five;
-            p.gate = &gate; p.trans = &trans; p.gain = &gain; p.warmth = &warmth; p.bass = &bass; p.mid = &mid;
-            p.treble = &treble; p.reverb = &reverb; p.master = &master; p.revType = &revType; p.ampType = &ampType;
+            p.gate = &gate; p.trans = &trans; p.reverb = &reverb;
+            for (int h = 0; h < Params::numHeads; ++h)
+            {
+                auto& hp = p.heads[(size_t) h];
+                auto& hf = heads[(size_t) h];
+                hp.on = &hf.on; hp.volume = &hf.volume; hp.treble = &hf.treble; hp.mid = &hf.mid; hp.bass = &hf.bass; hp.master = &hf.master;
+            }
             p.wahOn = &wahOn; p.wahAuto = &wahAuto; p.wahPos = &wahPos; p.wahSens = &wahSens; p.wahQ = &wahQ;
             p.compOn = &compOn; p.compSustain = &compSustain; p.compAttack = &compAttack; p.compLevel = &compLevel;
             p.tsOn = &tsOn; p.tsDrive = &tsDrive; p.tsTone = &tsTone; p.tsLevel = &tsLevel;
@@ -634,13 +651,13 @@ namespace
         check ("strip: mono in gives sound in both channels", res.finite && res.leftRms > 0.005 && res.rightRms > 0.005, buf);
 
         StripFixture spring;
-        spring.revType = 1.0f;
+        spring.reverb = 6.0f;
         res = runStrip (spring);
-        check ("strip: spring reverb type works", res.finite && res.leftRms > 0.005 && res.rightRms > 0.005, "both channels live");
+        check ("strip: spring reverb unit works", res.finite && res.leftRms > 0.005 && res.rightRms > 0.005, "both channels live");
 
         StripFixture all;
         all.gate = 5.0f; all.trans = 3.0f; all.wahOn = 1.0f; all.compOn = 1.0f; all.tsOn = 1.0f; all.odOn = 1.0f;
-        all.odDrive = 9.0f; all.warmth = 8.0f; all.reverb = 7.0f;
+        all.odDrive = 9.0f; all.heads[0].volume = 8.0f; all.reverb = 7.0f;
         res = runStrip (all, 100);   // odd block size on purpose
         std::snprintf (buf, sizeof buf, "peak %.2f, L rms %.4f", res.peak, res.leftRms);
         check ("strip: every pedal on, odd block size", res.finite && res.leftRms > 0.001 && res.peak < 8.0, buf);
@@ -660,8 +677,7 @@ namespace
     double thdOfStrip (int model, float volume, float inputPeak)
     {
         StripFixture f;
-        f.ampType = (float) model;
-        f.gain = volume;
+        f.amp (model, volume);
         f.reverb = 0.0f;
         const auto in = sine (220.0, inputPeak, (int) sr);
         ChannelStrip strip;
@@ -683,8 +699,7 @@ namespace
     double imdOfStrip (int model, float volume)
     {
         StripFixture f;
-        f.ampType = (float) model;
-        f.gain = volume;
+        f.amp (model, volume);
         f.reverb = 0.0f;
         std::vector<float> in ((size_t) sr);
         for (size_t i = 0; i < in.size(); ++i)
@@ -838,7 +853,6 @@ namespace
         auto wetLevel = [&] (bool recorded)
         {
             StripFixture f;
-            f.revType = 1.0f;
             f.reverb = 10.0f;
             ChannelStrip strip;
             strip.setParams (f.params());
@@ -873,6 +887,115 @@ namespace
         std::snprintf (buf, sizeof buf, "first 200 ms of the tail: built-in spring %.4f, recorded tank %.4f (%.1f dB)",
                        algorithmic, recorded, db (recorded / std::max (1.0e-9, algorithmic)));
         check ("IR pack: recorded tank plays at a similar level", recorded > 0.0 && std::abs (db (recorded / algorithmic)) < 8.0, buf);
+    }
+}
+
+// ---------------------------------------------------------------- NAM captures (only when the pack exists)
+namespace
+{
+    void testNamPack()
+    {
+        const auto file = juce::File::getCurrentWorkingDirectory().getChildFile ("Assets/private-ir/nam.bin");
+        if (! file.existsAsFile())
+        {
+            std::printf ("      (no Assets/private-ir/nam.bin here: NAM tests skipped)\n");
+            return;
+        }
+        juce::MemoryBlock data;
+        file.loadFileAsData (data);
+        NamPack pack (data.getData(), data.getSize());
+        std::snprintf (buf, sizeof buf, "%d Dumble captures (first %s), %d TS9", pack.count (NamPack::dumble),
+                       pack.name (NamPack::dumble, 0).toRawUTF8(), pack.count (NamPack::ts9));
+        check ("NAM pack: loads", pack.isValid() && pack.count (NamPack::dumble) > 10 && pack.count (NamPack::ts9) == 4, buf);
+        if (! pack.isValid())
+            return;
+
+        // one strip with only the given head on, the Dumble fed its KLEAN capture
+        auto render = [&] (int head, double& seconds)
+        {
+            StripFixture f;
+            f.reverb = 0.0f;
+            for (int h = 0; h < Params::numHeads; ++h)
+                f.heads[(size_t) h].on = h == head ? 1.0f : 0.0f;
+            ChannelStrip strip;
+            strip.setParams (f.params());
+            strip.prepare (sr, 256);
+            if (head == 2)
+                if (auto model = pack.load (NamPack::dumble, 0, sr, 256); model != nullptr || (std::printf ("      load failed: %s\n", pack.getLastError().toRawUTF8()), false))
+                {
+                    float inGain = 1.0f, outGain = 1.0f;
+                    namLevels (*model, inGain, outGain);
+                    strip.dumblePlayer().post (std::move (model), inGain, outGain);
+                }
+            waitForCabinets (strip, 256);
+            const auto in = pluck (196.0, (int) (sr * 2.0));
+            std::vector<float> l (in.size()), r (in.size());
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            for (size_t s = 0; s < in.size(); s += 256)
+                strip.process (in.data() + s, l.data() + s, r.data() + s, (int) std::min<size_t> (256, in.size() - s));
+            seconds = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
+            strip.collectGarbage();
+            return std::make_pair (rms (l, 0, (int) l.size()), allFinite (l));
+        };
+        double tFender = 0.0, tDumble = 0.0;
+        const auto fender = render (0, tFender);
+        const auto dumble = render (2, tDumble);
+        std::snprintf (buf, sizeof buf, "Fender rms %.4f, Dumble rms %.4f (%.1f dB); 2 s of audio took %.0f ms (Fender) / %.0f ms (Dumble)",
+                       fender.first, dumble.first, db (dumble.first / std::max (1.0e-9, fender.first)), tFender * 1000.0, tDumble * 1000.0);
+        check ("NAM: the Dumble capture plays, at a level close to the Fender", dumble.second && dumble.first > 0.0
+                                                                               && std::abs (db (dumble.first / fender.first)) < 6.0, buf);
+        check ("NAM: the Dumble runs well faster than real time", tDumble < 0.5, buf);
+
+        // the full rig as the app runs it: three heads, recorded cabinets and spring tank, at small and large blocks
+        const auto irFile = juce::File::getCurrentWorkingDirectory().getChildFile ("Assets/private-ir/irs.bin");
+        if (! irFile.existsAsFile())
+            return;
+        juce::MemoryBlock irData;
+        irFile.loadFileAsData (irData);
+        IRPack irs (irData.getData(), irData.getSize());
+        for (int block : { 128, 512 })
+        {
+            StripFixture f;
+            for (auto& h : f.heads)
+                h.on = 1.0f;
+            ChannelStrip strip;
+            strip.setParams (f.params());
+            strip.prepare (sr, block);
+            for (int h = 0; h < 3; ++h)
+            {
+                juce::AudioBuffer<float> ir;
+                double rate = 0.0;
+                if (irs.cabinet (h == 0 ? 0 : 1, 10.0f, ir, rate))
+                    strip.postIR (h, std::move (ir), rate);
+            }
+            {
+                juce::AudioBuffer<float> ir;
+                double rate = 0.0;
+                if (irs.springTank (5, 5, ir, rate))
+                    strip.postIR (ChannelStrip::springTank, std::move (ir), rate);
+            }
+            if (auto model = pack.load (NamPack::dumble, 0, sr, block))
+            {
+                float inGain = 1.0f, outGain = 1.0f;
+                namLevels (*model, inGain, outGain);
+                strip.dumblePlayer().post (std::move (model), inGain, outGain);
+            }
+            waitForCabinets (strip, block);
+            std::vector<float> z ((size_t) block, 0.0f), l ((size_t) block), r ((size_t) block);
+            for (int i = 0; i < 300; ++i)   // let the spring tank finish loading
+            {
+                strip.process (z.data(), l.data(), r.data(), block);
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+            }
+            const auto in = pluck (196.0, (int) (sr * 4.0));
+            std::vector<float> ol (in.size()), orr (in.size());
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            for (size_t s = 0; s + (size_t) block <= in.size(); s += (size_t) block)
+                strip.process (in.data() + s, ol.data() + s, orr.data() + s, block);
+            const double ms = juce::Time::getMillisecondCounterHiRes() - start;
+            std::printf ("      full rig, %d-sample blocks: %.0f ms for 4 s of audio = %.0f%% of one core\n", block, ms, ms / 40.0);
+            strip.collectGarbage();
+        }
     }
 }
 
@@ -959,20 +1082,20 @@ namespace
             std::printf (" %6.0f", std::sqrt (bandEdges[b] * bandEdges[b + 1]));
         std::printf ("\n");
 
-        // the settings in use: plate reverb at 6.6, warmth 5.1, tone knobs flat, master 8.9
-        const auto userSettings = [] (StripFixture& f) { f.warmth = 5.1f; f.reverb = 6.6f; f.master = 8.9f; };
+        // the settings in use: plate reverb at 6.6, volume 5, tone knobs flat, master 8.9
+        const auto userSettings = [] (StripFixture& f) { f.reverb = 6.6f; f.heads[0].master = 8.9f; };
 
         std::vector<float> noiseIn ((size_t) (sr * 5));
         for (auto& v : noiseIn)
             v = noise (0.03f);
         const auto noiseBands = bandLevels (noiseIn, 24000);
 
-        { StripFixture f; userSettings (f); f.reverb = 0.0f; f.warmth = 0.0f;
-          printRow ("quiet noise, warmth 0, no reverb", bandLevels (renderLeft (f, noiseIn), 24000), noiseBands); }
+        { StripFixture f; userSettings (f); f.reverb = 0.0f; f.heads[0].volume = 3.0f;
+          printRow ("quiet noise, volume 3, no reverb", bandLevels (renderLeft (f, noiseIn), 24000), noiseBands); }
         { StripFixture f; userSettings (f); f.reverb = 0.0f;
-          printRow ("quiet noise, warmth 5.1, no reverb", bandLevels (renderLeft (f, noiseIn), 24000), noiseBands); }
+          printRow ("quiet noise, volume 5, no reverb", bandLevels (renderLeft (f, noiseIn), 24000), noiseBands); }
         { StripFixture f; userSettings (f);
-          printRow ("quiet noise, warmth 5.1, plate reverb 6.6", bandLevels (renderLeft (f, noiseIn), 24000), noiseBands); }
+          printRow ("quiet noise, volume 5, spring 6.6", bandLevels (renderLeft (f, noiseIn), 24000), noiseBands); }
 
         for (float peak : { 0.15f, 0.4f, 0.8f })
         {
@@ -980,14 +1103,14 @@ namespace
             const auto in = bandLevels (chord, 12000);
             char name[96];
 
-            { StripFixture f; userSettings (f); f.reverb = 0.0f; f.warmth = 0.0f;
-              std::snprintf (name, sizeof name, "chord peak %.2f, warmth 0, no reverb", peak);
+            { StripFixture f; userSettings (f); f.reverb = 0.0f; f.heads[0].volume = 3.0f;
+              std::snprintf (name, sizeof name, "chord peak %.2f, volume 3, no reverb", peak);
               printRow (name, bandLevels (renderLeft (f, chord), 12000), in); }
             { StripFixture f; userSettings (f); f.reverb = 0.0f;
-              std::snprintf (name, sizeof name, "chord peak %.2f, warmth 5.1, no reverb", peak);
+              std::snprintf (name, sizeof name, "chord peak %.2f, volume 5, no reverb", peak);
               printRow (name, bandLevels (renderLeft (f, chord), 12000), in); }
             { StripFixture f; userSettings (f);
-              std::snprintf (name, sizeof name, "chord peak %.2f, warmth 5.1, plate 6.6", peak);
+              std::snprintf (name, sizeof name, "chord peak %.2f, volume 5, spring 6.6", peak);
               printRow (name, bandLevels (renderLeft (f, chord), 12000), in); }
         }
     }
@@ -1027,6 +1150,7 @@ int main (int argc, char** argv)
     testStrip();
     testAmp();
     testIRPack();
+    testNamPack();
     testPresets();
 
     std::printf ("\n%d failure%s\n", failures, failures == 1 ? "" : "s");

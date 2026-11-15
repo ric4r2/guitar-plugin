@@ -116,45 +116,37 @@ private:
 
 // The amp fills the window edge to edge: carry handle, tweed cabinet, a control panel divided into sections
 // (input, preamp, tone, reverb, master, logo) with cream pointer knobs, and the grille cloth below.
-// One amp in mono mode, two (left above right) in stereo mode.
+// The amps: a Fender spring reverb unit feeding three heads.
 class AmpView : public juce::Component
 {
 public:
     AmpView (GuitarDriveProcessor&, const juce::Image& logoImage);
 
-    void setStereo (bool on);
     void resized() override;
     void paint (juce::Graphics&) override;
 
 private:
-    static constexpr int numKnobs = 12;
-
-    struct Strip
+    // The Fender spring reverb unit on top (it feeds all three amps), with the gate and transposer beside it,
+    // and three amp heads below it, each with its own controls and power switch.
+    struct Head
     {
-        std::array<KnobUI, numKnobs> knobs;
-        juce::TextButton revType { "PLATE" };
-        int revState = 0;
-        SelectorSwitch ampType { { "FENDER", "BOTH", "TWO-ROCK" } };   // switch positions; parameter values 0, 2, 1
+        std::vector<std::unique_ptr<KnobUI>> knobs;
+        std::unique_ptr<JewelSwitch> power;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAttach;
+        juce::Rectangle<int> body, grille, panel, display;
+        juce::Image tolexImage, grilleImage;
     };
 
-    struct Group { juce::String title; juce::Rectangle<int> area; };
-    struct Layout
-    {
-        juce::Rectangle<int> cabinet, panel, grille, jack, badge;
-        std::vector<Group> groups;
-    };
+    void paintHead (juce::Graphics&, int index);
+    void paintReverbUnit (juce::Graphics&);
 
-    void layoutAmp (int index, juce::Rectangle<int> area);
-    void paintAmp (juce::Graphics&, int index);
-    void updateVisibility();
-
+    GuitarDriveProcessor& proc;
     juce::AudioProcessorValueTreeState& apvts;
     const juce::Image& logo;
-    std::array<Strip, 2> strips;
-    std::array<std::unique_ptr<juce::ParameterAttachment>, 2> revAttach, ampAttach;
-    std::array<Layout, 2> lay;
-    juce::Image tweedImage, grilleImage;
-    bool stereo = false;
+    std::array<KnobUI, 5> unitKnobs;   // gate, transpose, dwell, tone, mix
+    std::array<Head, Params::numHeads> heads;
+    juce::Rectangle<int> unit, unitGrille, unitPanel, utilityPanel;
+    juce::Image unitTweed, unitGrilleImage;
 };
 
 // A stompbox floating on the black background: a colored enclosure seen slightly from above, a brushed aluminum
@@ -345,29 +337,18 @@ private:
         void paint (juce::Graphics& g) override { if (painter) painter (g); }
     };
 
-    // pan, solo and mute of one channel, shown in the top bar in stereo mode
-    struct ChannelControls
-    {
-        KnobUI pan;
-        juce::Label name;
-        juce::TextButton solo { "SOLO" }, mute { "MUTE" };
-    };
-
     void paintRoot (juce::Graphics&);
     void recomputeDesign();
     void layout();
-    juce::Rectangle<int> channelRect (int channel) const;
-    void setStereo (bool);
+    void initialiseSize();
     void setTunerOpen (bool);
     void setView (View);
-    void setSolo (int state);
-    void updateSoloButtons();
     void updateVisibility();
     float fitScale() const;
     void keepOnScreen();
 
     static constexpr int designW = 1360, topH = 220, footerH = 64, gap = 8;
-    static constexpr int monoBodyH = 430, stereoHalfH = 320, sideTagW = 64;
+    static constexpr int monoBodyH = 430;
 
     GuitarDriveProcessor& proc;
     VintageLook look;
@@ -377,27 +358,19 @@ private:
     std::array<std::unique_ptr<IconButton>, 5> tabs;
     HeaderKnob inputKnob, outputKnob;
     LevelMeter inputMeter, outputMeter;
-    PillSwitch stereoSwitch { "STEREO", "MONO" };
-    IconButton settingsButton { Icon::gear };
-    bool stereoAvailable = false;   // the stereo switch only shows when turned on in settings
-    void showSettingsMenu();
-    static juce::PropertiesFile& settingsFile();
-    std::array<ChannelControls, 2> channels;
-    juce::TextButton rightInButton { "RIGHT = INPUT 1" };
     AmpView ampView;
-    std::array<std::unique_ptr<WahView>, 2> wahViews;
-    std::array<std::unique_ptr<PedalBoard>, 2> preBoards, postBoards;
-    std::array<std::unique_ptr<EqView>, 2> eqViews;
+    std::unique_ptr<WahView> wahView;
+    std::unique_ptr<PedalBoard> preBoard, postBoard;
+    std::unique_ptr<EqView> eqView;
     FooterBar footer;
     PresetBar presetBar;
     TunerView tunerView;
-    juce::ParameterAttachment stereoAttach, rightInAttach, soloAttach;
 
     juce::Rectangle<int> bodyRect, footerRect;
-    int designH = 714, bodyH = monoBodyH, soloState = 0;
+    int designH = 714, bodyH = monoBodyH;
     juce::Image backdrop;   // green frame texture, made at the design size
     View view = View::amp;
-    bool stereoMode = false, tunerOpen = false, rightUsesIn1 = true, sizeInitialised = false;
+    bool tunerOpen = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GuitarDriveEditor)
 };
