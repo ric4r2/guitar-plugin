@@ -12,6 +12,8 @@ namespace
     // The first stage works on the guitar at a third of its level and makes it back up afterwards: clean notes keep
     // their sparkle instead of picking up the extra tones (about 1.2 % on two high strings) that smeared them.
     constexpr float firstStageIn = 1.0f / 3.0f;
+    // auto level: pedals can push the amps up to 6 dB harder than the clean guitar (enough to drive them, like a boost)
+    constexpr float maxPedalPush = 2.0f;
 }
 
 ChannelStrip::ChannelStrip()
@@ -45,6 +47,12 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     sr = sampleRate;
     maxBlock = maxBlockSize;
     dryScratch.assign ((size_t) maxBlockSize, 0.0f);
+    levelRef.assign ((size_t) maxBlockSize, 0.0f);
+    inPeak = outPeak = cleanGain = 0.0f;
+    levelGain = levelTarget = 1.0f;
+    levelPedalsWereOn = false;
+    peakDecay = (float) std::exp (-1.0 / (1.0 * sampleRate));             // note peaks, held for about a second
+    levelStep = (float) (1.0 - std::exp (-1.0 / (0.08 * sampleRate)));    // gain moves over about 80 ms
     eqDryL.assign ((size_t) maxBlockSize, 0.0f);
     eqDryR.assign ((size_t) maxBlockSize, 0.0f);
     eq.prepare (sampleRate, maxBlockSize);
@@ -291,6 +299,8 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
 {
     if ((int) dryScratch.size() < n)
         dryScratch.resize ((size_t) n);
+    if ((int) levelRef.size() < n)
+        levelRef.resize ((size_t) n);
     for (auto* b : { &sendBuf, &wetBuf, &spareR, &ampIn })
         if ((int) b->size() < n)
             b->resize ((size_t) n);
@@ -308,6 +318,7 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     {
         wah.process (outL, n, params.wahAuto->load() > 0.5f, params.wahPos->load(), params.wahSens->load(), params.wahQ->load());
     });
+    std::copy (outL, outL + n, levelRef.begin());   // the guitar before the compressor and drive pedals
     runPedal (compSwitch, params.compOn->load() > 0.5f, outL, n, [&]
     {
         comp.process (outL, n, params.compSustain->load(), params.compAttack->load(), params.compLevel->load());
@@ -337,6 +348,18 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
         ts9Tone.process (juce::dsp::ProcessContextReplacing<float> (block));
         juce::FloatVectorOperations::multiply (outL, juce::Decibels::decibelsToGain (knobToDb (params.odLevel->load(), 2.4f)), n);
     });
+
+    // Auto level, part 1: the pedals' output follows the gain worked out at the end of the last block
+    const bool levelPedalsOn = params.compOn->load() > 0.5f || params.tsOn->load() > 0.5f || params.odOn->load() > 0.5f;
+    const bool autoLevelOn = levelPedalsOn && (params.autoLevel == nullptr || params.autoLevel->load() > 0.5f);
+    if (! autoLevelOn)
+        levelTarget = 1.0f;
+    for (int i = 0; i < n; ++i)
+    {
+        inPeak = juce::jmax (std::abs (levelRef[(size_t) i]), inPeak * peakDecay);
+        levelGain += levelStep * (levelTarget - levelGain);
+        outL[i] *= levelGain;
+    }
 
     // Fender spring reverb unit in front of the amps: like the real one, the tank gets a thin signal (no low-mids, so
     // the wash doesn't muddy the tone), minus the pick attack, and its output is mixed with the dry guitar
@@ -403,6 +426,27 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
             outL[i] += m.gain.getNextValue() * m.buffer[(size_t) i];
     }
     std::copy (outL, outL + n, outR);
+
+    // Auto level, part 2: compare how hard notes hit at the amps' output with the clean reference
+    for (int i = 0; i < n; ++i)
+        outPeak = juce::jmax (std::abs (outL[i]), outPeak * peakDecay);
+    if (inPeak > 1.0e-3f)   // only while playing
+    {
+        const float gainNow = outPeak / inPeak;
+        if (! levelPedalsOn)
+        {
+            // clean: learn the amps' gain (fast at first, then slowly as settings change)
+            cleanGain = cleanGain <= 0.0f ? gainNow : cleanGain + 0.02f * (gainNow - cleanGain);
+        }
+        else if (autoLevelOn && cleanGain > 0.0f)
+        {
+            // too loud: turn the pedals down; quieter than allowed: let them back up (never above unity)
+            const float allowed = maxPedalPush * cleanGain;
+            const float ratio = allowed / juce::jmax (1.0e-6f, gainNow);
+            levelTarget = juce::jlimit (0.001f, 1.0f, levelTarget * std::pow (ratio, 0.25f));
+        }
+    }
+    levelPedalsWereOn = levelPedalsOn;
 
     // equalizer, then the effects after it
     {

@@ -95,6 +95,7 @@ private:
     juce::AudioBuffer<float> scratch { numScratch, 0 };
 
     juce::SmoothedValue<float> inputGain, outputGain, muteSmooth;
+    float limiterGain = 1.0f, limiterRelease = 0.001f;
 
     // cached parameter pointers
     const std::atomic<float>* inputPtr = nullptr;

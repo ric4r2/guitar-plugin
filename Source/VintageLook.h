@@ -8,14 +8,14 @@ namespace Palette
     const juce::Colour graphite      { 0xff0f2219 };
     const juce::Colour graphiteMid   { 0xff173226 };
     const juce::Colour graphiteLight { 0xff22432f };
-    const juce::Colour silver        { 0xffc9c2a4 };
-    const juce::Colour text          { 0xfff1e6c4 };   // cream, a little yellow
-    const juce::Colour dim           { 0xffa39d7f };
+    const juce::Colour silver        { 0xffc3c7cd };
+    const juce::Colour text          { 0xfff3f4f6 };   // white lettering
+    const juce::Colour dim           { 0xffa7acb2 };
     const juce::Colour inkDark       { 0xff1d1f23 };
     const juce::Colour felt          { 0xff12291e };
     const juce::Colour feltDeep      { 0xff08170f };
-    const juce::Colour brass         { 0xffcfae63 };
-    const juce::Colour brassDark     { 0xff6f5527 };
+    const juce::Colour brass         { 0xffc9cdd3 };   // trim: silver (the name is kept for the places that use it)
+    const juce::Colour brassDark     { 0xff62666d };
 
     // vintage amp
     const juce::Colour plate         { 0xff111113 };
@@ -219,14 +219,14 @@ private:
             const bool lit = a <= angle + 0.001f;
             const float s = std::sin (a), co = -std::cos (a);
             const float inner = scaleR * (major ? 0.80f : 0.87f);
-            g.setColour (lit ? Palette::amber : Palette::text.withAlpha (major ? 0.7f : 0.35f));
+            g.setColour (lit ? Palette::text : Palette::text.withAlpha (major ? 0.45f : 0.22f));
             g.drawLine (c.x + s * inner, c.y + co * inner, c.x + s * scaleR, c.y + co * scaleR, major ? 2.2f : 1.4f);
         }
 
         const float kr = radius * 0.66f;
         g.setColour (juce::Colours::black.withAlpha (0.5f));                       // shadow on the panel
         g.fillEllipse (c.x - kr, c.y - kr + kr * 0.14f, kr * 2.0f, kr * 2.0f);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff3dc9a), c.x - kr * 0.6f, c.y - kr * 0.7f,
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff4f5f7), c.x - kr * 0.6f, c.y - kr * 0.7f,
                                                  Palette::brassDark, c.x + kr * 0.6f, c.y + kr * 0.8f, true));
         g.fillEllipse (c.x - kr, c.y - kr, kr * 2.0f, kr * 2.0f);                  // brass bezel
 
@@ -567,7 +567,7 @@ public:
         setSelectAllWhenFocused (true);
         setFont (juce::FontOptions (22.0f, juce::Font::bold));
         setColour (juce::TextEditor::backgroundColourId, Palette::feltDeep);
-        setColour (juce::TextEditor::textColourId, Palette::amber);
+        setColour (juce::TextEditor::textColourId, Palette::text);
         setColour (juce::TextEditor::outlineColourId, Palette::brass.withAlpha (0.7f));
         setColour (juce::TextEditor::focusedOutlineColourId, Palette::amber);
         setColour (juce::TextEditor::highlightColourId, Palette::amber.withAlpha (0.35f));

@@ -293,6 +293,7 @@ private:
 class PresetBar : public juce::Component, private juce::Timer
 {
 public:
+    void step (int direction);   // previous / next preset
     explicit PresetBar (GuitarDriveProcessor&);
 
     void resized() override;
@@ -302,7 +303,7 @@ private:
     void timerCallback() override { refresh(); }
     void refresh();
     void showMenu();
-    void step (int direction);
+
     void saveCurrent();
     void saveAsNew();
     void saveNamed (const juce::String& name);
@@ -323,6 +324,7 @@ public:
 
     void paint (juce::Graphics&) override {}
     void resized() override;
+    bool keyPressed (const juce::KeyPress&) override;
 
     // for the snapshot tool: 0 wah, 1 pre effects, 2 amp, 3 equalizer, 4 post effects
     void showView (int index) { setView ((View) juce::jlimit (0, 4, index)); }
@@ -358,6 +360,9 @@ private:
     std::array<std::unique_ptr<IconButton>, 5> tabs;
     HeaderKnob inputKnob, outputKnob;
     LevelMeter inputMeter, outputMeter;
+    IconButton settingsButton { Icon::gear };
+    void showSettingsMenu();
+    void toggleParameter (const juce::String& id);
     AmpView ampView;
     std::unique_ptr<WahView> wahView;
     std::unique_ptr<PedalBoard> preBoard, postBoard;

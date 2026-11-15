@@ -1,8 +1,10 @@
 #include "Presets.h"
+#include "Params.h"
 
 namespace
 {
-    bool belongsToPreset (const juce::String& id) { return ! id.startsWith ("metro_"); }
+    // the metronome and the auto-level setting are not part of a sound
+    bool belongsToPreset (const juce::String& id) { return ! id.startsWith ("metro_") && id != Params::autoLevel; }
 }
 
 PresetManager::PresetManager (juce::AudioProcessorValueTreeState& state, juce::AudioProcessor& owner, juce::File presetFolder)

@@ -1332,6 +1332,27 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
     root.addAndMakeVisible (footer);
     root.addAndMakeVisible (presetBar);
     root.addAndMakeVisible (tunerView);
+    settingsButton.setTooltip ("Settings and keyboard shortcuts");
+    settingsButton.onClick = [this] { showSettingsMenu(); };
+    root.addAndMakeVisible (settingsButton);   // last, so it sits on top of the footer
+
+    // Keyboard shortcuts go to the editor: buttons and knobs must not take the keyboard away (Space would press them).
+    std::function<void (juce::Component&)> noFocus = [&noFocus] (juce::Component& c)
+    {
+        for (auto* child : c.getChildren())
+        {
+            if (dynamic_cast<juce::TextEditor*> (child) == nullptr)
+                child->setWantsKeyboardFocus (false);
+            noFocus (*child);
+        }
+    };
+    noFocus (root);
+    setWantsKeyboardFocus (true);
+    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<GuitarDriveEditor> (this)]
+    {
+        if (safe != nullptr && safe->isShowing())
+            safe->grabKeyboardFocus();
+    });
 
     footer.tunerButton.onClick = [this] { setTunerOpen (footer.tunerButton.getToggleState()); };
 
@@ -1453,6 +1474,7 @@ void GuitarDriveEditor::layout()
     inputMeter.setBounds (36, 78, 8, 128);
     inputKnob.place ({ 70, 72, 120, 140 });
     presetBar.setBounds ((w - 420) / 2, 70, 420, 130);
+    settingsButton.setBounds (designW - 196, designH - footerH + 16, 30, 30);
 
     outputKnob.place ({ w - 190, 72, 120, 140 });
     outputMeter.setBounds (w - 44, 78, 8, 128);
@@ -1517,4 +1539,76 @@ void GuitarDriveEditor::paintRoot (juce::Graphics& g)
         g.drawImage (logoImage, juce::Rectangle<float> ((float) designW - 150.0f, 4.0f, 126.0f, 60.0f), juce::RectanglePlacement::centred);
     }
 
+}
+
+// ---------------------------------------------------------------- keyboard and settings
+
+namespace
+{
+    struct Shortcut { char key; const char* param; const char* what; };
+    const Shortcut shortcuts[] = {
+        { 'q', "wah_on", "Wah" }, { 'w', "comp_on", "Compressor" }, { 'e', "ts_on", "Tube Screamer" }, { 'r', "od_on", "Overdrive / TS9" },
+        { 'a', "ph_on", "Phaser" }, { 's', "ch_on", "Chorus" }, { 'd', "tr_on", "Tremolo" }, { 'f', "dl_on", "Delay" }, { 'g', "rv_on", "Digital reverb" },
+        { '1', "fn_on", "Fender head" }, { '2', "rk_on", "Two-Rock head" }, { '3', "dm_on", "Dumble head" },
+    };
+}
+
+void GuitarDriveEditor::toggleParameter (const juce::String& id)
+{
+    if (auto* p = proc.apvts.getParameter (id))
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.0f : 1.0f);
+        p->endChangeGesture();
+    }
+}
+
+bool GuitarDriveEditor::keyPressed (const juce::KeyPress& key)
+{
+    const auto mods = key.getModifiers();
+    if (mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown())
+        return false;   // leave shortcuts like Ctrl+S to the host
+
+    if (key == juce::KeyPress::leftKey)   { presetBar.step (-1); return true; }
+    if (key == juce::KeyPress::rightKey)  { presetBar.step (1); return true; }
+    if (key == juce::KeyPress::spaceKey)  { toggleParameter (Params::metroOn); return true; }
+
+    const auto c = (char) juce::CharacterFunctions::toLowerCase (key.getTextCharacter());
+    if (c == 't')
+    {
+        setTunerOpen (! tunerOpen);
+        return true;
+    }
+    for (const auto& s : shortcuts)
+        if (s.key == c)
+        {
+            toggleParameter (s.param);
+            return true;
+        }
+    return false;
+}
+
+void GuitarDriveEditor::showSettingsMenu()
+{
+    juce::PopupMenu keys;
+    for (const auto& s : shortcuts)
+        keys.addItem (juce::String::charToString ((juce::juce_wchar) juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) s.key))
+                      + "    " + s.what + " on / off", false, false, nullptr);
+    keys.addSeparator();
+    keys.addItem ("Left / Right    previous / next preset", false, false, nullptr);
+    keys.addItem ("T    tuner", false, false, nullptr);
+    keys.addItem ("Space    metronome start / stop", false, false, nullptr);
+
+    const auto* autoLevel = proc.apvts.getRawParameterValue (Params::autoLevel);
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Settings");
+    menu.addItem ("Auto level when stacking pedals (pedals push at most 6 dB louder)", true, autoLevel->load() > 0.5f,
+                  [this] { toggleParameter (Params::autoLevel); });
+    menu.addSubMenu ("Keyboard shortcuts", keys);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (settingsButton),
+                        [safe = juce::Component::SafePointer<GuitarDriveEditor> (this)] (int)
+                        {
+                            if (safe != nullptr)
+                                safe->grabKeyboardFocus();   // keys keep working after the menu closes
+                        });
 }

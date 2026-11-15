@@ -15,16 +15,16 @@ public:
     {
         auto area = getLocalBounds().toFloat();
         const auto colour = ! isEnabled() ? Palette::text.withAlpha (0.22f)
-                          : getToggleState() ? Palette::amber
+                          : getToggleState() ? Palette::text
                           : (highlighted || down) ? Palette::text : Palette::text.withAlpha (0.72f);
 
         if (getToggleState())   // a small pilot lamp under the chosen tab
         {
             const juce::Point<float> lamp (area.getCentreX(), area.getBottom() - 1.5f);
-            g.setGradientFill (juce::ColourGradient (Palette::amber.withAlpha (0.55f), lamp.x, lamp.y,
-                                                     Palette::amber.withAlpha (0.0f), lamp.x + 10.0f, lamp.y, true));
+            g.setGradientFill (juce::ColourGradient (Palette::text.withAlpha (0.5f), lamp.x, lamp.y,
+                                                     Palette::text.withAlpha (0.0f), lamp.x + 10.0f, lamp.y, true));
             g.fillEllipse (lamp.x - 10.0f, lamp.y - 10.0f, 20.0f, 20.0f);
-            g.setColour (Palette::amber);
+            g.setColour (Palette::text);
             g.fillEllipse (lamp.x - 2.0f, lamp.y - 2.0f, 4.0f, 4.0f);
             area.removeFromBottom (4.0f);
         }

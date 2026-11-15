@@ -72,6 +72,9 @@ namespace Params
         return head == 2 ? dumble : circuit;
     }
 
+    // Keeps stacked pedals from jumping in volume (a setting, not part of presets)
+    inline constexpr const char* autoLevel = "auto_level";
+
     // the same pedals, with the overdrive shown as the TS9 when its captures are built in
     inline const std::vector<PedalDef>& prePedalsTs9();
 

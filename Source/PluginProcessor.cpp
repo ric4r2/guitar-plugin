@@ -90,6 +90,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::create
         addKnob (p, Params::eqId (b), "EQ " + String (Params::eqLabel (b)),
                  { Params::eqId (b), Params::eqLabel (b), -12.0f, 12.0f, 0.0f, 0.1f, " dB", 1 });
 
+    addSwitch (p, Params::autoLevel, "Auto Level", true);
     addKnob (p, Params::inputKnob().id, "Input", Params::inputKnob());
     addKnob (p, Params::outputKnob().id, "Output", Params::outputKnob());
 
@@ -221,6 +222,7 @@ ChannelStrip::Params GuitarDriveProcessor::stripParams() const
     p.gate = raw ("gate");
     p.trans = raw ("trans");
     p.reverb = raw ("reverb");
+    p.autoLevel = raw (Params::autoLevel);
     for (int h = 0; h < Params::numHeads; ++h)
     {
         auto& hp = p.heads[(size_t) h];
@@ -276,6 +278,8 @@ void GuitarDriveProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     outputGain.setCurrentAndTargetValue (fx::dbToGain (outputPtr->load()));
     muteSmooth.reset (sampleRate, 0.02);
     muteSmooth.setCurrentAndTargetValue (1.0f);
+    limiterGain = 1.0f;
+    limiterRelease = (float) (1.0 - std::exp (-1.0 / (0.15 * sampleRate)));
 
     decim = std::max (1, (int) std::lround (sampleRate / 24000.0));   // analyse at about 24 kHz
     tunerRate.store ((float) (sampleRate / decim));
@@ -381,7 +385,17 @@ void GuitarDriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     for (int i = 0; i < n; ++i)
     {
         const float gain = muteSmooth.getNextValue() * outputGain.getNextValue();
-        const float a = l[i] * gain, b = r[i] * gain;
+        float a = l[i] * gain, b = r[i] * gain;
+
+        // safety limiter: nothing leaves above -1 dBFS; it reacts at once and lets go over 150 ms
+        constexpr float ceiling = 0.89f;
+        const float peak = std::max (std::abs (a), std::abs (b));
+        if (peak * limiterGain > ceiling)
+            limiterGain = ceiling / peak;
+        else
+            limiterGain += limiterRelease * (1.0f - limiterGain);
+        a *= limiterGain;
+        b *= limiterGain;
         outPeak = std::max (outPeak, std::max (std::abs (a), std::abs (b)));
         if (dstR != nullptr)
         {

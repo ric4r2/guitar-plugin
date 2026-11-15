@@ -575,7 +575,7 @@ namespace
 
     struct StripFixture
     {
-        std::atomic<float> gate { 0 }, trans { 0 }, reverb { 2.5f };
+        std::atomic<float> gate { 0 }, trans { 0 }, reverb { 2.5f }, autoLevel { 1 };
         struct HeadFix { std::atomic<float> on { 0 }, volume { 5 }, treble { 5 }, mid { 5 }, bass { 5 }, master { 8 }; };
         std::array<HeadFix, Params::numHeads> heads;
         StripFixture() { heads[0].on = 1.0f; }   // the Fender alone unless a test says otherwise
@@ -605,7 +605,7 @@ namespace
             q.dlTime = &delayTime;
             q.dlFb = q.dlTone = q.dlMix = &five;
             q.rvSize = q.rvDamp = q.rvMix = &five;
-            p.gate = &gate; p.trans = &trans; p.reverb = &reverb;
+            p.gate = &gate; p.trans = &trans; p.reverb = &reverb; p.autoLevel = &autoLevel;
             for (int h = 0; h < Params::numHeads; ++h)
             {
                 auto& hp = p.heads[(size_t) h];
@@ -643,8 +643,60 @@ namespace
         return { allFinite (l) && allFinite (r), rms (l, 0, 48000), rms (r, 0, 48000), peak };
     }
 
+    // Clean for two seconds, then the pedals on for two (as a player would): how hard do the notes hit at the output?
+    std::pair<double, double> stackedLevel (bool comp, bool ts, bool od, bool autoLevel)
+    {
+        StripFixture f;
+        f.reverb = 0.0f;
+        f.amp (0, 4.0f);
+        f.autoLevel = autoLevel ? 1.0f : 0.0f;
+        f.compLevel = 9.0f;
+        f.tsLevel = 10.0f; f.tsDrive = 6.0f;
+        f.odLevel = 10.0f; f.odDrive = 6.0f;
+        ChannelStrip strip;
+        strip.setParams (f.params());
+        strip.prepare (sr, 256);
+        waitForCabinets (strip, 256);
+
+        std::vector<float> in ((size_t) (sr * 4.0), 0.0f);
+        for (double t0 : { 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5 })   // a note every half second
+        {
+            const auto note = pluck (196.0, (int) (sr * 0.5));
+            for (size_t i = 0; i < note.size(); ++i)
+                in[(size_t) (t0 * sr) + i] += note[i];
+        }
+        std::vector<float> l (in.size()), r (in.size());
+        for (size_t s = 0; s < in.size(); s += 256)
+        {
+            if (s >= (size_t) (sr * 2.0))
+            {
+                f.compOn = comp ? 1.0f : 0.0f;
+                f.tsOn = ts ? 1.0f : 0.0f;
+                f.odOn = od ? 1.0f : 0.0f;
+            }
+            strip.process (in.data() + s, l.data() + s, r.data() + s, (int) std::min<size_t> (256, in.size() - s));
+        }
+        double clean = 0.0, pedals = 0.0;
+        for (int i = (int) (sr * 1.0); i < (int) (sr * 2.0); ++i)
+            clean = std::max (clean, (double) std::abs (l[(size_t) i]));
+        for (int i = (int) (sr * 3.0); i < (int) (sr * 4.0); ++i)
+            pedals = std::max (pedals, (double) std::abs (l[(size_t) i]));
+        return { clean, pedals };
+    }
+
     void testStrip()
     {
+        {
+            const auto off = stackedLevel (true, true, true, false);
+            const auto on = stackedLevel (true, true, true, true);
+            const double jumpOff = db (off.second / off.first), jumpOn = db (on.second / on.first);
+            std::snprintf (buf, sizeof buf, "compressor + screamer + overdrive, levels up: %+.1f dB without auto level, %+.1f dB with it", jumpOff, jumpOn);
+            check ("auto level keeps stacked pedals from jumping", jumpOn < 7.5 && jumpOn < jumpOff - 3.0, buf);
+            const auto single = stackedLevel (false, true, false, true);
+            std::snprintf (buf, sizeof buf, "tube screamer alone, level 10: %+.1f dB", db (single.second / single.first));
+            check ("auto level still lets one pedal push the amp", db (single.second / single.first) > 0.0, buf);
+        }
+
         StripFixture plain;
         auto res = runStrip (plain);
         std::snprintf (buf, sizeof buf, "L rms %.4f, R rms %.4f, peak %.2f", res.leftRms, res.rightRms, res.peak);
