@@ -504,6 +504,7 @@ namespace
             p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "fn_volume", 1 }, "Fender Volume", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 5.0f));
             p.push_back (std::make_unique<juce::AudioParameterFloat> (juce::ParameterID { "ts_drive", 1 }, "Drive", juce::NormalisableRange<float> (0.0f, 10.0f, 0.01f), 2.5f));
             p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "ts_on", 1 }, "TS", false));
+            p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "fn_on", 1 }, "Fender On", true));
             p.push_back (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { "metro_on", 1 }, "Metro", false));
             return { p.begin(), p.end() };
         }
@@ -528,12 +529,12 @@ namespace
 
             const auto factory = pm.names();
             check ("factory presets are created on first run",
-                   factory.contains ("Init") && factory.contains ("Mayer Trio") && factory.contains ("SRV Edge"), factory.joinIntoString (", ").toRawUTF8());
+                   factory.contains ("Init") && factory.contains ("Mayer Clean") && factory.contains ("SRV Edge"), factory.joinIntoString (", ").toRawUTF8());
 
             pm.load ("SRV Edge");
             std::snprintf (buf, sizeof buf, "ts_on %.0f, ts_drive %.1f, fender volume %.1f", proc.get ("ts_on"), proc.get ("ts_drive"), proc.get ("fn_volume"));
-            check ("loading a preset applies its values", proc.get ("ts_on") > 0.5f && std::abs (proc.get ("ts_drive") - 2.0f) < 0.05f
-                                                           && std::abs (proc.get ("fn_volume") - 6.0f) < 0.05f, buf);
+            check ("loading a preset applies its values", proc.get ("ts_on") > 0.5f && std::abs (proc.get ("ts_drive") - 3.0f) < 0.05f
+                                                           && std::abs (proc.get ("fn_volume") - 6.5f) < 0.05f, buf);
             check ("a freshly loaded preset is not marked modified", pm.currentName() == "SRV Edge" && ! pm.isDirty(), "no asterisk");
 
             proc.set ("gain", 8.0f);
@@ -560,6 +561,34 @@ namespace
             check ("modified state is recognised after the host restores it", pm.isDirty(), "asterisk survives a reload");
         }
         dir.deleteRecursively();
+
+        // a presets folder from before the three heads: the old factory presets are rewritten, the user's are kept
+        const auto old = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                             .getChildFile ("jgr-preset-upgrade-" + juce::String (juce::Random::getSystemRandom().nextInt (1000000)));
+        old.createDirectory();
+        const juce::String stale = "<?xml version=\"1.0\"?>\n<PRESET name=\"SRV Edge\" version=\"1\"><PARAM id=\"gain\" value=\"3.0\"/></PRESET>\n";
+        const juce::String mine = "<?xml version=\"1.0\"?>\n<PRESET name=\"Default\" version=\"1\"><PARAM id=\"fn_on\" value=\"1.0\"/>"
+                                  "<PARAM id=\"fn_volume\" value=\"5.6\"/></PRESET>\n";
+        old.getChildFile ("SRV Edge.xml").replaceWithText (stale);
+        old.getChildFile ("Default.xml").replaceWithText (mine);
+        const auto mineOnDisk = old.getChildFile ("Default.xml").loadFileAsString();
+        {
+            TestProcessor proc;
+            PresetManager pm (proc.apvts, proc, old);
+            check ("old factory presets are updated, yours are kept",
+                   old.getChildFile ("SRV Edge.xml").loadFileAsString().contains ("factory=") && old.getChildFile ("Default.xml").loadFileAsString() == mineOnDisk
+                       && pm.names().contains ("Mayer Clean"),
+                   pm.names().joinIntoString (", ").toRawUTF8());
+            pm.load ("SRV Edge");
+            pm.save ("SRV Edge");   // saved over by the user: from now on it's theirs
+        }
+        {
+            old.getChildFile (".factory-version").deleteFile();   // even when the factory version goes up again
+            TestProcessor proc;
+            PresetManager pm (proc.apvts, proc, old);
+            check ("a factory preset you saved over is never replaced", ! old.getChildFile ("SRV Edge.xml").loadFileAsString().contains ("factory="), "kept");
+        }
+        old.deleteRecursively();
     }
 
     // the speaker cabinets load on a background thread: feed silence until they are in use, then start clean

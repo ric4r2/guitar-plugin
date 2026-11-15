@@ -150,31 +150,63 @@ void PresetManager::restoreFromState()
                 snapshot[p->paramID] = p->convertTo0to1 ((float) e->getDoubleAttribute ("value"));
 }
 
-// Written once, the first time the program runs. Deleting them later sticks.
+// Factory presets are written the first time the program runs, and rewritten when factoryVersion goes up (new
+// parameters, better settings). Presets you made, and factory presets you saved over, are never touched; a factory
+// preset you deleted stays deleted until the next version.
 void PresetManager::seedFactoryPresets()
 {
-    if (folder.exists())
-        return;
+    constexpr int factoryVersion = 2;
     folder.createDirectory();
+    const auto marker = folder.getChildFile (".factory-version");
+    if (marker.loadFileAsString().trim().getIntValue() >= factoryVersion)
+        return;
 
     struct Factory { const char* name; std::vector<std::pair<const char*, float>> changes; };
     const std::vector<Factory> presets = {
         { "Init", {} },
-        // three amps at once, like John Mayer: the Dumble's cleanest capture, the Two-Rock and the Twin, light compression
-        { "Mayer Trio",  { { "comp_on", 1.0f }, { "comp_sustain", 3.5f }, { "comp_level", 5.5f },
-                           { "dm_voice", 0.0f }, { "rk_treble", 6.0f }, { "fn_mid", 4.5f }, { "reverb", 3.0f } } },
+        // John Mayer's clean: three amps at once (he plays a Dumble, a Two-Rock and a Fender together), all set clean,
+        // bright and a little scooped, with light compression and a touch of spring. The Tube Screamer is set up the way
+        // he pushes his amps with one (drive low, level up): press E to kick it in.
+        { "Mayer Clean", { { "comp_on", 1.0f }, { "comp_sustain", 3.5f }, { "comp_attack", 6.0f }, { "comp_level", 5.5f },
+                           { "fn_on", 1.0f }, { "fn_volume", 4.5f }, { "fn_treble", 6.5f }, { "fn_mid", 4.0f }, { "fn_bass", 4.5f }, { "fn_master", 7.0f },
+                           { "rk_on", 1.0f }, { "rk_volume", 4.5f }, { "rk_treble", 6.0f }, { "rk_mid", 4.5f }, { "rk_bass", 5.0f }, { "rk_master", 7.0f },
+                           { "dm_on", 1.0f }, { "dm_voice", 0.0f }, { "dm_volume", 5.0f }, { "dm_treble", 6.0f }, { "dm_mid", 4.5f }, { "dm_bass", 4.5f }, { "dm_master", 7.0f },
+                           { "ts_on", 0.0f }, { "ts_drive", 3.0f }, { "ts_tone", 6.0f }, { "ts_level", 7.0f },
+                           { "rev_dwell", 5.0f }, { "rev_tone", 6.0f }, { "reverb", 3.0f } } },
         // the Dumble alone, through the Two-Rock 2x12
-        { "Dumble Klean", { { "fn_on", 0.0f }, { "rk_on", 0.0f }, { "dm_voice", 0.0f }, { "reverb", 2.5f } } },
-        // Tube Screamer with low drive and the level up into the Twin
-        { "SRV Edge",    { { "rk_on", 0.0f }, { "dm_on", 0.0f }, { "ts_on", 1.0f }, { "ts_drive", 2.0f }, { "ts_tone", 6.0f },
-                           { "ts_level", 8.0f }, { "fn_volume", 6.0f }, { "fn_bass", 5.5f }, { "reverb", 2.5f } } },
+        { "Dumble Klean", { { "fn_on", 0.0f }, { "rk_on", 0.0f }, { "dm_on", 1.0f }, { "dm_voice", 0.0f }, { "reverb", 2.5f } } },
+        // Stevie Ray Vaughan: a Fender (his Vibroverbs and Super Reverbs) turned up to the edge of break-up, a Dumble
+        // under it (he played a Dumble Steel String Singer alongside them), and a Tube Screamer with the drive low,
+        // the tone past noon and the level way up, hitting the amps hard. Mids up, a little more spring.
+        { "SRV Edge",    { { "fn_on", 1.0f }, { "fn_volume", 6.5f }, { "fn_treble", 6.5f }, { "fn_mid", 5.5f }, { "fn_bass", 5.0f }, { "fn_master", 7.5f },
+                           { "rk_on", 0.0f },
+                           { "dm_on", 1.0f }, { "dm_voice", 0.0f }, { "dm_volume", 5.5f }, { "dm_treble", 5.5f }, { "dm_mid", 6.0f }, { "dm_bass", 5.0f }, { "dm_master", 6.5f },
+                           { "ts_on", 1.0f }, { "ts_drive", 3.0f }, { "ts_tone", 6.5f }, { "ts_level", 8.5f },
+                           { "comp_on", 0.0f }, { "rev_dwell", 6.0f }, { "rev_tone", 6.0f }, { "reverb", 3.5f } } },
     };
 
     for (const auto& preset : presets)
     {
+        const auto file = fileFor (preset.name);
+        if (file.existsAsFile())
+        {
+            // ours (an older factory version) or from before the three heads: rewrite it; otherwise it's yours: keep it
+            const auto old = juce::parseXML (file);
+            bool ours = false, hasHeads = false;
+            if (old != nullptr)
+            {
+                ours = old->getIntAttribute ("factory") > 0;
+                for (auto* e : old->getChildWithTagNameIterator ("PARAM"))
+                    hasHeads = hasHeads || e->getStringAttribute ("id") == "fn_on";
+            }
+            if (! ours && hasHeads)
+                continue;
+        }
+
         juce::XmlElement xml ("PRESET");
         xml.setAttribute ("name", preset.name);
         xml.setAttribute ("version", 1);
+        xml.setAttribute ("factory", factoryVersion);
 
         for (auto* p : presetParameters())
         {
@@ -187,6 +219,7 @@ void PresetManager::seedFactoryPresets()
             e->setAttribute ("id", p->paramID);
             e->setAttribute ("value", (double) value);
         }
-        xml.writeTo (fileFor (preset.name));
+        xml.writeTo (file);
     }
+    marker.replaceWithText (juce::String (factoryVersion));
 }

@@ -47,6 +47,10 @@ GuitarDriveProcessor::GuitarDriveProcessor()
    #endif
     if (irPack != nullptr || namPack != nullptr)
         loader = std::make_unique<Loader> (*this);
+
+    // a new instance starts on your preset named "Default", if you have one (a saved session overrides it)
+    if (presets.names().contains ("Default"))
+        presets.load ("Default");
 }
 
 GuitarDriveProcessor::~GuitarDriveProcessor()
