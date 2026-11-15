@@ -259,6 +259,28 @@ private:
     juce::Image brushed;
 };
 
+// A lamp per pedal, labelled with its initials, lit while the pedal is on; click one to switch its pedal.
+// Lets you see what's engaged from the amp view without going to the pedal boards.
+class PedalLamps : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
+{
+public:
+    explicit PedalLamps (juce::AudioProcessorValueTreeState&);
+
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+
+private:
+    struct Lamp { const char* initials; const char* param; const char* name; char key; };
+    void timerCallback() override;
+    juce::Rectangle<float> cell (int index) const;
+    int lampAt (juce::Point<float>) const;
+
+    juce::AudioProcessorValueTreeState& state;
+    std::vector<Lamp> lamps;
+    std::vector<bool> shown;
+};
+
 // Slim footer under every view: tuner, then the metronome in one row (play/pause, tap, tempo, time signature,
 // pulse lights, click volume). Tempo and signature are typed with the keyboard; the wheel and arrow keys nudge them.
 class FooterBar : public juce::Component, private juce::Timer
@@ -286,6 +308,7 @@ private:
     juce::ParameterAttachment bpmAttach, beatsAttach, noteAttach;
     std::vector<double> taps;
     juce::Rectangle<int> dotsArea;
+    PedalLamps lamps;
 };
 
 // Presets, top centre: icons to save, create and delete, then the name between two arrows.

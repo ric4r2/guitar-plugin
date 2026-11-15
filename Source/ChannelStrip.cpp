@@ -50,7 +50,9 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     levelRef.assign ((size_t) maxBlockSize, 0.0f);
     inPeak = outPeak = cleanGain = 0.0f;
     levelGain = levelTarget = 1.0f;
-    levelPedalsWereOn = false;
+    lastPedalSet = 0;
+    learnHoldoff = 0;
+    gainTrace.assign ((size_t) maxBlockSize, 1.0f);
     peakDecay = (float) std::exp (-1.0 / (1.0 * sampleRate));             // note peaks, held for about a second
     levelStep = (float) (1.0 - std::exp (-1.0 / (0.08 * sampleRate)));    // gain moves over about 80 ms
     eqDryL.assign ((size_t) maxBlockSize, 0.0f);
@@ -361,14 +363,25 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     });
 
     // Auto level, part 1: the pedals' output follows the gain worked out at the end of the last block
-    const bool levelPedalsOn = params.compOn->load() > 0.5f || params.tsOn->load() > 0.5f || params.odOn->load() > 0.5f;
+    const int pedalSet = (params.compOn->load() > 0.5f ? 1 : 0) | (params.tsOn->load() > 0.5f ? 2 : 0) | (params.odOn->load() > 0.5f ? 4 : 0);
+    const bool levelPedalsOn = pedalSet != 0;
     const bool autoLevelOn = levelPedalsOn && (params.autoLevel == nullptr || params.autoLevel->load() > 0.5f);
+    if (pedalSet != lastPedalSet)
+    {
+        // a pedal went on or off: the held peaks belong to the old sound, start measuring again
+        outPeak = inPeak = 0.0f;
+        learnHoldoff = (int) sr;   // and don't learn the clean level from the old sound's tail
+        if (! levelPedalsOn || lastPedalSet == 0)
+            levelTarget = 1.0f;
+        lastPedalSet = pedalSet;
+    }
     if (! autoLevelOn)
         levelTarget = 1.0f;
     for (int i = 0; i < n; ++i)
     {
         inPeak = juce::jmax (std::abs (levelRef[(size_t) i]), inPeak * peakDecay);
         levelGain += levelStep * (levelTarget - levelGain);
+        gainTrace[(size_t) i] = levelGain;
         outL[i] *= levelGain;
     }
 
@@ -439,25 +452,26 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     std::copy (outL, outL + n, outR);
 
     // Auto level, part 2: compare how hard notes hit at the amps' output with the clean reference
+    // The output is divided by the gain the auto level applied, so the peak says how loud the pedals would make the amps
+    // with the auto level off. That doesn't change when the gain does, so the gain can't chase its own tail.
     for (int i = 0; i < n; ++i)
-        outPeak = juce::jmax (std::abs (outL[i]), outPeak * peakDecay);
+        outPeak = juce::jmax (std::abs (outL[i]) / juce::jmax (0.01f, gainTrace[(size_t) i]), outPeak * peakDecay);
+    learnHoldoff = juce::jmax (0, learnHoldoff - n);
     if (inPeak > 1.0e-3f)   // only while playing
     {
         const float gainNow = outPeak / inPeak;
         if (! levelPedalsOn)
         {
             // clean: learn the amps' gain (fast at first, then slowly as settings change)
-            cleanGain = cleanGain <= 0.0f ? gainNow : cleanGain + 0.02f * (gainNow - cleanGain);
+            if (learnHoldoff == 0)
+                cleanGain = cleanGain <= 0.0f ? gainNow : cleanGain + 0.02f * (gainNow - cleanGain);
         }
-        else if (autoLevelOn && cleanGain > 0.0f)
+        else if (autoLevelOn && cleanGain > 0.0f && outPeak > 0.0f)
         {
-            // too loud: turn the pedals down; quieter than allowed: let them back up (never above unity)
-            const float allowed = maxPedalPush * cleanGain;
-            const float ratio = allowed / juce::jmax (1.0e-6f, gainNow);
-            levelTarget = juce::jlimit (0.001f, 1.0f, levelTarget * std::pow (ratio, 0.25f));
+            // as loud as allowed, never louder than the pedals alone, and never turned down more than 26 dB
+            levelTarget = juce::jlimit (0.05f, 1.0f, maxPedalPush * cleanGain / gainNow);
         }
     }
-    levelPedalsWereOn = levelPedalsOn;
 
     // equalizer, then the effects after it
     {

@@ -139,10 +139,13 @@ private:
     // Auto level: learns how loud the amps make the clean guitar, then keeps the compressor and drive pedals from
     // making the amps more than 6 dB louder than that, however many are on. Measured at the amps' output, so it follows
     // what you hear, whatever the amps and pedals do to the tone.
+    // The gain is worked out directly from what the pedals do (not nudged step by step, which kept overshooting into
+    // silence and back while the held peaks caught up): the amps' output is measured as if the auto level were off.
     float inPeak = 0.0f, outPeak = 0.0f, peakDecay = 0.0f;
     float cleanGain = 0.0f;   // amps' output peak / guitar peak, learned while no level pedal is on (0 = not yet)
     float levelGain = 1.0f, levelTarget = 1.0f, levelStep = 0.0f;
-    bool levelPedalsWereOn = false;
+    int lastPedalSet = 0, learnHoldoff = 0;   // which level pedals were on; samples to wait before trusting the peaks
+    std::vector<float> gainTrace;             // the auto level gain applied to each sample of this block
 
     // Fender (0) and Two-Rock (1) heads, modelled on their circuits (AmpModel.h), at 4x the sample rate
     struct CircuitHead

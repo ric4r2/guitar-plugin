@@ -644,8 +644,10 @@ namespace
         return { allFinite (l) && allFinite (r), rms (l, 0, 48000), rms (r, 0, 48000), peak };
     }
 
-    // Clean for two seconds, then the pedals on for two (as a player would): how hard do the notes hit at the output?
-    std::pair<double, double> stackedLevel (bool comp, bool ts, bool od, bool autoLevel)
+    // Clean for two seconds, then the pedals on for six (as a player would): how hard do the notes hit at the output,
+    // and how evenly (a level that pumps makes some notes much quieter than others)?
+    struct Stacked { double clean, pedals, spreadDb; };
+    Stacked stackedLevel (bool comp, bool ts, bool od, bool autoLevel, NamPack* pack = nullptr)
     {
         StripFixture f;
         f.reverb = 0.0f;
@@ -658,13 +660,22 @@ namespace
         strip.setParams (f.params());
         strip.prepare (sr, 256);
         waitForCabinets (strip, 256);
+        if (pack != nullptr)   // the real pedal captures: TS9 at drive 3, SD-1 at drive III
+            for (auto [player, group, index] : { std::tuple<NamPlayer*, int, int> { &strip.ts9Player(), NamPack::ts9, 1 },
+                                                 std::tuple<NamPlayer*, int, int> { &strip.sd1Player(), NamPack::sd1, 5 } })
+                if (auto model = pack->load (group, index, sr, 256))
+                {
+                    float inGain = 1.0f, outGain = 1.0f;
+                    namLevels (*model, inGain, outGain, false);
+                    player->post (std::move (model), inGain, outGain);
+                }
 
-        std::vector<float> in ((size_t) (sr * 4.0), 0.0f);
-        for (double t0 : { 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5 })   // a note every half second
+        std::vector<float> in ((size_t) (sr * 8.0), 0.0f);
+        for (int k = 0; k < 16; ++k)   // a note every half second
         {
             const auto note = pluck (196.0, (int) (sr * 0.5));
             for (size_t i = 0; i < note.size(); ++i)
-                in[(size_t) (t0 * sr) + i] += note[i];
+                in[(size_t) (k * 0.5 * sr) + i] += note[i];
         }
         std::vector<float> l (in.size()), r (in.size());
         for (size_t s = 0; s < in.size(); s += 256)
@@ -677,12 +688,19 @@ namespace
             }
             strip.process (in.data() + s, l.data() + s, r.data() + s, (int) std::min<size_t> (256, in.size() - s));
         }
-        double clean = 0.0, pedals = 0.0;
+        double clean = 0.0, pedals = 0.0, loudest = 0.0, quietest = 1.0e9;
         for (int i = (int) (sr * 1.0); i < (int) (sr * 2.0); ++i)
             clean = std::max (clean, (double) std::abs (l[(size_t) i]));
-        for (int i = (int) (sr * 3.0); i < (int) (sr * 4.0); ++i)
-            pedals = std::max (pedals, (double) std::abs (l[(size_t) i]));
-        return { clean, pedals };
+        for (int k = 6; k < 16; ++k)   // each note from a second after the pedals went on
+        {
+            double peak = 0.0;
+            for (int i = (int) (k * 0.5 * sr); i < (int) ((k + 1) * 0.5 * sr); ++i)
+                peak = std::max (peak, (double) std::abs (l[(size_t) i]));
+            pedals = std::max (pedals, peak);
+            loudest = std::max (loudest, peak);
+            quietest = std::min (quietest, peak);
+        }
+        return { clean, pedals, db (loudest / std::max (1.0e-9, quietest)) };
     }
 
     void testStrip()
@@ -690,12 +708,14 @@ namespace
         {
             const auto off = stackedLevel (true, true, true, false);
             const auto on = stackedLevel (true, true, true, true);
-            const double jumpOff = db (off.second / off.first), jumpOn = db (on.second / on.first);
+            const double jumpOff = db (off.pedals / off.clean), jumpOn = db (on.pedals / on.clean);
             std::snprintf (buf, sizeof buf, "compressor + screamer + overdrive, levels up: %+.1f dB without auto level, %+.1f dB with it", jumpOff, jumpOn);
             check ("auto level keeps stacked pedals from jumping", jumpOn < 7.5 && jumpOn < jumpOff - 3.0, buf);
+            std::snprintf (buf, sizeof buf, "same notes, loudest vs quietest: %.1f dB without auto level, %.1f dB with it", off.spreadDb, on.spreadDb);
+            check ("auto level doesn't pump", on.spreadDb < off.spreadDb + 3.0, buf);
             const auto single = stackedLevel (false, true, false, true);
-            std::snprintf (buf, sizeof buf, "tube screamer alone, level 10: %+.1f dB", db (single.second / single.first));
-            check ("auto level still lets one pedal push the amp", db (single.second / single.first) > 0.0, buf);
+            std::snprintf (buf, sizeof buf, "tube screamer alone, level 10: %+.1f dB, notes within %.1f dB", db (single.pedals / single.clean), single.spreadDb);
+            check ("auto level still lets one pedal push the amp", db (single.pedals / single.clean) > 0.0 && single.spreadDb < 3.0, buf);
         }
 
         StripFixture plain;
@@ -873,6 +893,7 @@ namespace
         if (! pack.isValid())
             return;
 
+
         for (int model = 0; model < 2; ++model)
             for (float mic : { 0.0f, 2.5f, 5.0f, 7.5f, 10.0f })
             {
@@ -962,6 +983,15 @@ namespace
         check ("NAM pack: loads", pack.isValid() && pack.count (NamPack::dumble) > 10 && pack.count (NamPack::ts9) == 4 && pack.count (NamPack::sd1) == 9, buf);
         if (! pack.isValid())
             return;
+        // the pedals as you play them, with the auto level on: every note should come out about as loud
+        for (const auto& [comp, ts, od, label] : { std::tuple<bool, bool, bool, const char*> { false, true, false, "TS9" },
+                                                   std::tuple<bool, bool, bool, const char*> { false, false, true, "SD-1" },
+                                                   std::tuple<bool, bool, bool, const char*> { true, true, true, "compressor + TS9 + SD-1" } })
+        {
+            const auto res = stackedLevel (comp, ts, od, true, &pack);
+            std::snprintf (buf, sizeof buf, "%s: %+.1f dB vs clean, notes within %.1f dB", label, db (res.pedals / res.clean), res.spreadDb);
+            check ("NAM pedals with auto level: steady", res.spreadDb < 3.0 && db (res.pedals / res.clean) < 7.5, buf);
+        }
 
         // pedal captures keep their real output level: how much louder than the guitar do they come out?
         for (const auto& [group, index, label] : { std::tuple<int, int, const char*> { NamPack::ts9, 1, "TS9 classic (D3, L7)" },

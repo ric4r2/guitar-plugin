@@ -933,10 +933,108 @@ void EqView::paint (juce::Graphics& g)
     g.fillRoundedRectangle (r.withHeight (r.getHeight() * 0.45f), 6.0f);   // glass reflection
 }
 
+// ---------------------------------------------------------------- pedal lamps in the footer
+
+PedalLamps::PedalLamps (juce::AudioProcessorValueTreeState& s)
+    : state (s),
+      lamps ({ { "W", "wah_on", "Wah", 'Q' }, { "C", "comp_on", "Compressor", 'W' }, { "TS", "ts_on", "Tube Screamer", 'E' },
+               { "OD", "od_on", "Overdrive", 'R' }, { "P", "ph_on", "Phaser", 'A' }, { "CH", "ch_on", "Chorus", 'S' },
+               { "T", "tr_on", "Tremolo", 'D' }, { "D", "dl_on", "Delay", 'F' }, { "R", "rv_on", "Digital Reverb", 'G' } })
+{
+    shown.assign (lamps.size(), false);
+    setWantsKeyboardFocus (false);
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    startTimerHz (15);
+}
+
+void PedalLamps::timerCallback()
+{
+    for (size_t i = 0; i < lamps.size(); ++i)
+    {
+        const bool on = state.getRawParameterValue (lamps[i].param)->load() > 0.5f;
+        if (on != shown[i])
+        {
+            shown[i] = on;
+            repaint();
+        }
+    }
+}
+
+juce::Rectangle<float> PedalLamps::cell (int index) const
+{
+    // the pre pedals (first four), a small gap, then the post pedals
+    const float w = ((float) getWidth() - 14.0f) / (float) lamps.size();
+    const float x = (float) index * w + (index >= 4 ? 14.0f : 0.0f);
+    return { x, 0.0f, w, (float) getHeight() };
+}
+
+int PedalLamps::lampAt (juce::Point<float> p) const
+{
+    for (int i = 0; i < (int) lamps.size(); ++i)
+        if (cell (i).contains (p))
+            return i;
+    return -1;
+}
+
+void PedalLamps::paint (juce::Graphics& g)
+{
+    // a thin silver line between the pre and post pedals
+    const float split = cell (4).getX() - 7.0f;
+    g.setColour (Palette::silver.withAlpha (0.35f));
+    g.drawLine (split, 8.0f, split, (float) getHeight() - 8.0f, 1.0f);
+
+    for (int i = 0; i < (int) lamps.size(); ++i)
+    {
+        const auto c = cell (i);
+        const bool on = state.getRawParameterValue (lamps[(size_t) i].param)->load() > 0.5f;
+        const auto led = juce::Rectangle<float> (9.0f, 9.0f).withCentre ({ c.getCentreX(), c.getY() + 13.0f });
+        const juce::Colour red (0xffff3b30);
+        if (on)
+        {
+            g.setGradientFill (juce::ColourGradient (red.withAlpha (0.55f), led.getCentreX(), led.getCentreY(),
+                                                     red.withAlpha (0.0f), led.getCentreX() + 10.0f, led.getCentreY(), true));
+            g.fillEllipse (led.expanded (6.0f));
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xffffd0c8), led.getCentreX() - 1.5f, led.getY() + 2.0f,
+                                                     red, led.getCentreX(), led.getBottom(), true));
+        }
+        else
+        {
+            g.setColour (juce::Colour (0xff3a1513));
+        }
+        g.fillEllipse (led);
+        g.setColour (juce::Colours::black.withAlpha (0.6f));
+        g.drawEllipse (led, 1.0f);
+
+        g.setColour (on ? Palette::text : Palette::text.withAlpha (0.38f));
+        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        g.drawText (lamps[(size_t) i].initials, c.withTrimmedTop (22.0f).withHeight (18.0f), juce::Justification::centred);
+    }
+}
+
+void PedalLamps::mouseMove (const juce::MouseEvent& e)
+{
+    const int i = lampAt (e.position);
+    setTooltip (i < 0 ? juce::String() : juce::String (lamps[(size_t) i].name) + " (key " + juce::String::charToString (lamps[(size_t) i].key) + ")");
+}
+
+void PedalLamps::mouseDown (const juce::MouseEvent& e)
+{
+    const int i = lampAt (e.position);
+    if (i < 0)
+        return;
+    if (auto* p = state.getParameter (lamps[(size_t) i].param))
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.0f : 1.0f);
+        p->endChangeGesture();
+    }
+}
+
 // ---------------------------------------------------------------- footer: tuner and metronome
 
 FooterBar::FooterBar (GuitarDriveProcessor& p)
     : proc (p),
+      lamps (p.apvts),
       bpmAttach (*p.apvts.getParameter (Params::metroBpm), [this] (float v) { bpmBox.setNumber ((int) std::lround (v)); }),
       beatsAttach (*p.apvts.getParameter (Params::metroBeats),
                    [this] (float v) { beatsBox.setNumber ((int) std::lround (v)); repaint (dotsArea); }),
@@ -986,6 +1084,7 @@ FooterBar::FooterBar (GuitarDriveProcessor& p)
     tapButton.setColour (juce::ComboBox::outlineColourId, Palette::brass);
     tapButton.onClick = [this] { tap(); };
     addAndMakeVisible (tapButton);
+    addAndMakeVisible (lamps);
 
     bpmAttach.sendInitialUpdate();
     beatsAttach.sendInitialUpdate();
@@ -1031,6 +1130,8 @@ void FooterBar::resized()
 
     clickKnob.setBounds (area.removeFromRight (46).withSizeKeepingCentre (46, 46));
     clickLabel.setBounds (area.removeFromRight (60));
+    area.removeFromRight (70);   // the settings gear sits here, on top of the footer
+    lamps.setBounds (area.removeFromRight (330).withSizeKeepingCentre (330, 44));
     area.removeFromRight (12);
     dotsArea = area.withSizeKeepingCentre (area.getWidth(), 24);
 }
@@ -1533,7 +1634,7 @@ namespace
 {
     struct Shortcut { char key; const char* param; const char* what; };
     const Shortcut shortcuts[] = {
-        { 'q', "wah_on", "Wah" }, { 'w', "comp_on", "Compressor" }, { 'e', "ts_on", "Tube Screamer" }, { 'r', "od_on", "Overdrive / TS9" },
+        { 'q', "wah_on", "Wah" }, { 'w', "comp_on", "Compressor" }, { 'e', "ts_on", "Tube Screamer" }, { 'r', "od_on", "Overdrive" },
         { 'a', "ph_on", "Phaser" }, { 's', "ch_on", "Chorus" }, { 'd', "tr_on", "Tremolo" }, { 'f', "dl_on", "Delay" }, { 'g', "rv_on", "Digital reverb" },
         { '1', "fn_on", "Fender head" }, { '2', "rk_on", "Two-Rock head" }, { '3', "dm_on", "Dumble head" },
     };

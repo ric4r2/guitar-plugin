@@ -25,5 +25,17 @@ int main (int argc, char** argv)
         juce::PNGImageFormat().writeImageToStream (image, out);
         std::printf ("wrote %s (%dx%d)\n", file.getFullPathName().toRawUTF8(), image.getWidth(), image.getHeight());
     }
+
+    // the footer lamps with a few pedals on: amp_lamps.png
+    for (const char* id : { "ts_on", "ch_on", "dl_on" })
+        if (auto* p = proc.apvts.getParameter (id))
+            p->setValueNotifyingHost (1.0f);
+    editor->showView (2);
+    const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
+    auto file = folder.getChildFile ("amp_lamps.png");
+    file.deleteFile();
+    juce::FileOutputStream out (file);
+    juce::PNGImageFormat().writeImageToStream (image, out);
+    std::printf ("wrote %s\n", file.getFullPathName().toRawUTF8());
     return 0;
 }
