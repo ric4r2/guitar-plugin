@@ -533,6 +533,19 @@ void AmpView::paintAmp (juce::Graphics& g, int index)
         }
         g.setColour (juce::Colour (0xff3b2412).withAlpha (0.85f));
         g.drawRoundedRectangle (gr, 26.0f, 3.0f);
+
+        // the maker's badge on the cloth, like the script logo on a real amp's grille
+        if (logo.isValid() && gr.getHeight() > 60.0f)
+        {
+            const float h = juce::jmin (gr.getHeight() * 0.42f, 120.0f);
+            const auto badgeArea = juce::Rectangle<float> (h * (float) logo.getWidth() / (float) logo.getHeight(), h)
+                                       .withCentre ({ gr.getCentreX(), gr.getY() + gr.getHeight() * 0.36f });
+            g.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+            g.setColour (juce::Colours::black.withAlpha (0.45f));   // drop shadow on the cloth: the logo's shape in black
+            g.drawImage (logo, badgeArea.translated (3.0f, 4.0f), juce::RectanglePlacement::centred, true);
+            g.setOpacity (1.0f);
+            g.drawImage (logo, badgeArea, juce::RectanglePlacement::centred);
+        }
     }
 }
 
