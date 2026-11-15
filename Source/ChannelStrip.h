@@ -109,7 +109,7 @@ public:
     bool cabinetsReady() const;
     void prepare (double sampleRate, int maxBlockSize);
     void reset();
-    int getLatencySamples() const { return (int) circuit[0].oversampling.getLatencyInSamples(); }
+    int getLatencySamples() const { return headLatency; }   // the heads are lined up on the slowest one
 
     // `in` may alias `outL`. Writes the finished stereo signal to outL and outR (n samples each).
     void process (const float* in, float* outL, float* outR, int n);
@@ -147,12 +147,13 @@ private:
     int lastPedalSet = 0, learnHoldoff = 0;   // which level pedals were on; samples to wait before trusting the peaks
     std::vector<float> gainTrace;             // the auto level gain applied to each sample of this block
 
-    // Fender (0) and Two-Rock (1) heads, modelled on their circuits (AmpModel.h), at 4x the sample rate
+    // Fender (0) and Two-Rock (1) heads, modelled on their circuits (AmpModel.h), at 4x the sample rate (2x at 88.2 kHz
+    // and up, which is already as fast: that halves the work at 96 kHz)
     struct CircuitHead
     {
         amp::ToneStack toneStack;
         amp::PowerAmp powerAmp;
-        juce::dsp::Oversampling<float> oversampling { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
+        std::unique_ptr<juce::dsp::Oversampling<float>> oversampling;
         juce::SmoothedValue<float> volume, drive;
         float baseDrive = 1.0f / 30.0f, outputTrim = 1.0f, preampPad = 1.0f, coupleState = 0.0f;
         float brightG = 0.0f, brightS = 0.0f;   // 47pF bright cap across the volume pot
@@ -179,9 +180,19 @@ private:
         juce::SmoothedValue<float> gain;
         std::vector<float> buffer;
         bool running = false;
+        // The Dumble capture comes through later than the circuit heads (its recording rig's delay, and the resampler
+        // at 96 kHz). Summed out of step they would cancel some frequencies (comb filtering), so the Fender and the
+        // Two-Rock wait for it; when the delay changes (another capture) they glide to it over one block.
+        std::vector<float> delayLine;   // a power-of-two ring
+        int delayPos = 0, delayNow = 0;
     };
+    int headLatency = 0;
+    double osRate = 192000.0;   // the circuit heads' oversampled rate
     std::array<HeadMix, ::Params::numHeads> mix;
     void resetHead (int index);
+    void alignWithDumble (HeadMix& m, int n);
+    int circuitDelay = 0;   // how long the circuit heads themselves take, measured in prepare()
+    int measureCircuitDelay();
 
     amp::TriodeStage v1a, v1b;
     float coupleCoef = 0.0f;   // coupling capacitor after V1B

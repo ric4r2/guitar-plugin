@@ -93,14 +93,19 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     // one with its neighbour, which is about 1.6k each.
     v1a.build (270.0, 100e3, 1.5e3, 12.0);
     v1b.build (270.0, 100e3, 1.64e3, 24.0);
-    coupleCoef = (float) (1.0 - std::exp (-juce::MathConstants<double>::twoPi * 12.0 / (sampleRate * 4.0)));
+    // about 192 kHz inside whatever the host runs at: 4x at 44.1/48 kHz, 2x at 88.2/96 (half the work there)
+    const int osOrder = sampleRate >= 88000.0 ? 1 : 2;
+    osRate = sampleRate * (1 << osOrder);
+    coupleCoef = (float) (1.0 - std::exp (-juce::MathConstants<double>::twoPi * 12.0 / (osRate)));
     for (int k = 0; k < 2; ++k)
     {
         auto& c = circuit[(size_t) k];
-        c.oversampling.initProcessing ((size_t) maxBlockSize);
-        c.powerAmp.prepare (sampleRate * 4.0);
+        c.oversampling = std::make_unique<juce::dsp::Oversampling<float>> (1, (size_t) osOrder,
+                                                                            juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true);
+        c.oversampling->initProcessing ((size_t) maxBlockSize);
+        c.powerAmp.prepare (osRate);
         configureCircuit (k);
-        c.volume.reset (sampleRate * 4.0, 0.03);
+        c.volume.reset (osRate, 0.03);
         c.volume.setCurrentAndTargetValue (volumeTaper (params.heads[(size_t) k].volume->load()));
     }
 
@@ -125,6 +130,17 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
         m.gain.setCurrentAndTargetValue (0.0f);
         m.running = false;
     }
+
+    // The circuit heads wait for the Dumble (the oversampling filters barely delay guitar frequencies: their reported
+    // latency is a worst case). Room for the longest delay: the resampler at 192 kHz plus a slow capture.
+    for (int h = 0; h < ::Params::numHeads; ++h)
+    {
+        mix[(size_t) h].delayLine.assign (2048, 0.0f);
+        mix[(size_t) h].delayPos = 0;
+        mix[(size_t) h].delayNow = dumble.player.latencySamples();
+    }
+    headLatency = (int) std::lround (circuit[0].oversampling->getLatencyInSamples()) + dumble.player.latencySamples();
+    circuitDelay = measureCircuitDelay();
     ++prepareCount;
 }
 
@@ -132,7 +148,7 @@ void ChannelStrip::configureCircuit (int index)
 {
     auto& a = circuit[(size_t) index];
     const bool twoRock = index == 1;
-    a.toneStack.prepare (sr * 4.0, twoRock ? amp::twoRock : amp::twinReverb);
+    a.toneStack.prepare (osRate, twoRock ? amp::twoRock : amp::twinReverb);
 
     // Volts out of V1B that drive the power amp to full power. Both are big clean amps meant for pedals: the 85 W
     // Twin Reverb (four 6L6) and a 50-100 W Two-Rock with a stiff supply.
@@ -149,7 +165,7 @@ void ChannelStrip::configureCircuit (int index)
 
     // Less bass into the second stage and the power tubes keeps chords from turning to mush: the Two-Rock cuts a bit
     // higher, as its tighter low end is part of its voice.
-    a.tightG = (float) std::tan (juce::MathConstants<double>::pi * (twoRock ? 100.0 : 75.0) / (sr * 4.0));
+    a.tightG = (float) std::tan (juce::MathConstants<double>::pi * (twoRock ? 100.0 : 75.0) / (osRate));
 }
 
 void ChannelStrip::resetHead (int index)
@@ -159,7 +175,7 @@ void ChannelStrip::resetHead (int index)
         auto& a = circuit[(size_t) index];
         a.toneStack.reset();
         a.powerAmp.reset();
-        a.oversampling.reset();
+        a.oversampling->reset();
         a.coupleState = a.brightS = a.tightS = 0.0f;
     }
     else
@@ -168,6 +184,53 @@ void ChannelStrip::resetHead (int index)
             f->reset();
     }
     cabinets[(size_t) index].reset();
+    std::fill (mix[(size_t) index].delayLine.begin(), mix[(size_t) index].delayLine.end(), 0.0f);
+}
+
+int ChannelStrip::measureCircuitDelay()
+{
+    // the same quiet noise burst namDelay() uses on the captures, through the Fender head; then back to silence
+    const int n = 8192, start = 512, burst = 4096, maxLag = 200;
+    juce::Random rng (1234);
+    std::vector<float> src ((size_t) n, 0.0f), x ((size_t) n, 0.0f);
+    for (int i = 0; i < burst; ++i)
+        src[(size_t) (start + i)] = x[(size_t) (start + i)] = 0.02f * (rng.nextFloat() * 2.0f - 1.0f);
+    for (int s = 0; s < n; s += maxBlock)
+        runCircuit (0, x.data() + s, juce::jmin (maxBlock, n - s));
+    int best = 0;
+    double bestC = -1.0;
+    for (int lag = 0; lag < maxLag; ++lag)
+    {
+        double c = 0.0;
+        for (int i = start; i < start + burst; ++i)
+            c += (double) src[(size_t) i] * x[(size_t) (i + lag)];
+        if (std::abs (c) > bestC)
+        {
+            bestC = std::abs (c);
+            best = lag;
+        }
+    }
+    resetHead (0);
+    return best;
+}
+
+void ChannelStrip::alignWithDumble (HeadMix& m, int n)
+{
+    const int mask = (int) m.delayLine.size() - 1;
+    const int target = juce::jlimit (0, mask, dumble.player.totalDelay() - circuitDelay);
+    for (int i = 0; i < n; ++i)
+    {
+        m.delayLine[(size_t) m.delayPos] = m.buffer[(size_t) i];
+        float y = m.delayLine[(size_t) ((m.delayPos - m.delayNow) & mask)];
+        if (target != m.delayNow)   // glide from the old delay to the new one over this block
+        {
+            const float g = (float) (i + 1) / (float) n;
+            y += g * (m.delayLine[(size_t) ((m.delayPos - target) & mask)] - y);
+        }
+        m.buffer[(size_t) i] = y;
+        m.delayPos = (m.delayPos + 1) & mask;
+    }
+    m.delayNow = target;
 }
 
 void ChannelStrip::postIR (int target, juce::AudioBuffer<float>&& ir, double irSampleRate)
@@ -244,12 +307,12 @@ void ChannelStrip::runCircuit (int index, float* x, int n)
         // AB763 bright cap: 47pF across the 1M volume pot. Treble skips the part of the pot above the wiper, so the
         // lower the volume, the more sparkle: H = t + (1 - t) * highpass, with time constant t (1 - t) * 1M * 47pF.
         const double tau = juce::jmax (1.0e-12, (double) taper * (1.0 - taper) * 1.0e6 * 47.0e-12);
-        const double fc = juce::jmin (0.45 * sr * 4.0, 1.0 / (juce::MathConstants<double>::twoPi * tau));
-        a.brightG = (float) std::tan (juce::MathConstants<double>::pi * fc / (sr * 4.0));
+        const double fc = juce::jmin (0.45 * osRate, 1.0 / (juce::MathConstants<double>::twoPi * tau));
+        a.brightG = (float) std::tan (juce::MathConstants<double>::pi * fc / (osRate));
     }
 
     // V1A -> tone stack -> volume pot -> V1B -> coupling cap -> phase inverter and power tubes, at 4x oversampling
-    fx::processOversampled (a.oversampling, x, n, maxBlock, [&] (float* d, size_t count)
+    fx::processOversampled (*a.oversampling, x, n, maxBlock, [&] (float* d, size_t count)
     {
         for (size_t i = 0; i < count; ++i)
         {
@@ -418,6 +481,7 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     const float share = 1.0f / std::sqrt ((float) juce::jmax (1, playing));
 
     std::fill (outL, outL + n, 0.0f);
+    dumble.player.update();   // a new Dumble capture changes how long the other heads wait
     for (int h = 0; h < ::Params::numHeads; ++h)
     {
         auto& m = mix[(size_t) h];
@@ -442,6 +506,8 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
             runCircuit (h, m.buffer.data(), n);
         else
             runDumble (m.buffer.data(), n);
+        if (h < 2)
+            alignWithDumble (m, n);
 
         float* chans[1] = { m.buffer.data() };
         juce::dsp::AudioBlock<float> block (chans, 1, (size_t) n);

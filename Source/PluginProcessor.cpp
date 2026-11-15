@@ -58,6 +58,8 @@ GuitarDriveProcessor::~GuitarDriveProcessor()
     loader.reset();   // stop loading before anything it uses goes away
 }
 
+
+
 juce::AudioProcessorValueTreeState::ParameterLayout GuitarDriveProcessor::createLayout()
 {
     using namespace juce;
@@ -201,11 +203,13 @@ void GuitarDriveProcessor::Loader::run()
             {
                 const auto loadInto = [&] (NamPlayer& player, int group, int index)
                 {
-                    if (auto model = owner.namPack->load (group, index, strip.getSampleRate(), strip.getMaxBlockSize()))
+                    if (auto model = owner.namPack->load (group, index, player.modelRate(), player.modelBlockSize()))
                     {
                         float inGain = 1.0f, outGain = 1.0f;
                         namLevels (*model, inGain, outGain, group == NamPack::dumble);   // pedals keep their own level
-                        player.post (std::move (model), inGain, outGain);
+                        // the Dumble plays next to the other heads, which wait for it (see ChannelStrip)
+                        const int delay = group == NamPack::dumble ? namDelay (*model, player.modelRate(), player.modelBlockSize(), inGain) : 0;
+                        player.post (std::move (model), inGain, outGain, delay);
                     }
                 };
                 const int dumble = owner.dumbleIndexFor (owner.raw (Params::headId (2, "voice"))->load());

@@ -529,7 +529,7 @@ namespace
 
             const auto factory = pm.names();
             check ("factory presets are created on first run",
-                   factory.contains ("Init") && factory.contains ("Mayer Clean") && factory.contains ("SRV Edge"), factory.joinIntoString (", ").toRawUTF8());
+                   factory.contains ("Init") && factory.contains ("Default") && factory.contains ("Mayer Clean") && factory.contains ("SRV Edge"), factory.joinIntoString (", ").toRawUTF8());
 
             pm.load ("SRV Edge");
             std::snprintf (buf, sizeof buf, "ts_on %.0f, ts_drive %.1f, fender volume %.1f", proc.get ("ts_on"), proc.get ("ts_drive"), proc.get ("fn_volume"));
@@ -1080,21 +1080,226 @@ namespace
                                                                                && std::abs (db (dumble.first / fender.first)) < 6.0, buf);
         check ("NAM: the Dumble runs well faster than real time", tDumble < 0.5, buf);
 
-        // the full rig as the app runs it: three heads, recorded cabinets and spring tank, at small and large blocks
+        // ---- high sample rates: the captures run at their own 48 kHz through the rate bridge
+        // the bridge's delay is exactly what it says, whatever the block sizes
+        for (int factor : { 2, 4 })
+        {
+            RateBridge bridge;
+            bridge.prepare (factor, 300);
+            // a smooth 1 kHz burst (at 96 kHz), so the delay can be read to a fraction of a sample
+            std::vector<float> src (6000, 0.0f);
+            for (int i = 0; i < (int) src.size(); ++i)
+            {
+                const double t = (i - 1000.0) / 200.0;
+                src[(size_t) i] = (float) (std::exp (-t * t) * std::sin (6.283185307179586 * 1000.0 * (i - 1000.0) / 96000.0));
+            }
+            auto x = src;
+            int pos = 0, k = 0;
+            while (pos < (int) x.size())
+            {
+                const int n = juce::jmin ((int) x.size() - pos, k++ % 2 == 0 ? 255 : 300);   // odd and even blocks
+                bridge.process (x.data() + pos, n, [] (float*, int) {});
+                pos += n;
+            }
+            const auto corr = [&] (int lag)
+            {
+                double c = 0.0;
+                for (int i = 400; i < 5000; ++i)
+                    c += (double) src[(size_t) i] * x[(size_t) (i + lag)];
+                return c;
+            };
+            int best = 0;
+            for (int lag = 0; lag < 400; ++lag)
+                if (corr (lag) > corr (best))
+                    best = lag;
+            const double a = corr (best - 1), b = corr (best), c = corr (best + 1);
+            const double delay = best + 0.5 * (a - c) / (a - 2.0 * b + c);   // parabola through the peak
+            std::snprintf (buf, sizeof buf, "factor %d: delay %.2f samples, reported %d", factor, delay, bridge.latency());
+            check ("rate bridge: fixed, known delay", std::abs (delay - bridge.latency()) < 0.25, buf);
+        }
+
+        // The Dumble at 96 kHz should sound as it does at 48 kHz. How much brighter (energy above 3 kHz, relative to the
+        // whole) and louder does it come out, with the bridge and the old way (the capture run at 96 kHz)?
+        {
+            const auto measure = [&] (double rate, bool bridged, double& level, double& bright)
+            {
+                const int n = (int) (rate * 1.5);
+                std::vector<float> x ((size_t) n);
+                for (int i = 0; i < n; ++i)   // the same note at either rate
+                {
+                    const double t = i / rate;
+                    double s = 0.0;
+                    for (int h = 1; h <= 8; ++h)
+                        s += 0.3 / h * std::sin (6.283185307179586 * 196.0 * h * t) * std::exp (-t / 0.6);
+                    x[(size_t) i] = (float) s;
+                }
+                if (bridged)
+                {
+                    NamPlayer player;
+                    player.prepare (rate, 256);
+                    if (auto model = pack.load (NamPack::dumble, 0, player.modelRate(), player.modelBlockSize()))
+                    {
+                        float inGain = 1.0f, outGain = 1.0f;
+                        namLevels (*model, inGain, outGain);
+                        player.post (std::move (model), inGain, outGain);
+                    }
+                    inBlocks (x, 256, [&] (float* d, int m) { player.process (d, m); });
+                    player.collectGarbage();
+                }
+                else if (auto model = pack.load (NamPack::dumble, 0, rate, 256))
+                {
+                    float inGain = 1.0f, outGain = 1.0f;
+                    namLevels (*model, inGain, outGain);
+                    std::vector<float> tmp (256);
+                    inBlocks (x, 256, [&] (float* d, int m)
+                    {
+                        for (int i = 0; i < m; ++i)
+                            d[i] *= inGain;
+                        float* ins[1] = { d };
+                        float* outs[1] = { tmp.data() };
+                        model->process (ins, outs, m);
+                        for (int i = 0; i < m; ++i)
+                            d[i] = tmp[(size_t) i] * outGain;
+                    });
+                }
+                const int a = (int) (rate * 0.2), b = n;
+                level = rms (x, a, b);
+                const float g = (float) std::tan (juce::MathConstants<double>::pi * 3000.0 / rate);
+                float s1 = 0.0f;
+                std::vector<float> hp (x.size());
+                for (size_t i = 0; i < x.size(); ++i)   // one-pole high-pass at 3 kHz
+                {
+                    const float v = (x[i] - s1) * g / (1.0f + g);
+                    const float low = v + s1;
+                    s1 = low + v;
+                    hp[i] = x[i] - low;
+                }
+                bright = db (rms (hp, a, b) / level);
+            };
+            double l48, b48, l96, b96, lOld, bOld;
+            measure (48000.0, true, l48, b48);
+            measure (96000.0, true, l96, b96);
+            measure (96000.0, false, lOld, bOld);
+            std::snprintf (buf, sizeof buf, "96 vs 48 kHz: level %+.1f dB, brightness %+.1f dB (the capture run at 96 kHz: %+.1f dB, %+.1f dB)",
+                           db (l96 / l48), b96 - b48, db (lOld / l48), bOld - b48);
+            check ("NAM at 96 kHz sounds as at 48 kHz", std::abs (db (l96 / l48)) < 1.0 && std::abs (b96 - b48) < 1.0, buf);
+        }
+
+        // how long each Dumble capture takes to come through (its recording rig's own delay)
+        {
+            juce::String delays;
+            bool sane = true;
+            for (int index : { 0, 10, 20, 33, 45, 55, 65 })
+                if (auto model = pack.load (NamPack::dumble, index, sr, 256))
+                {
+                    float inGain = 1.0f, outGain = 1.0f;
+                    namLevels (*model, inGain, outGain);
+                    const int d = namDelay (*model, sr, 256, inGain);
+                    sane = sane && d >= 0 && d < 100;
+                    delays << index << ":" << d << " ";
+                }
+            check ("NAM: Dumble capture delays measured", sane, ("index:samples at 48 kHz " + delays).toRawUTF8());
+        }
+
+        // the heads line up: the Two-Rock and the Dumble (same cabinet) summed without one lagging the other
+        for (const auto& [rate, voice] : { std::pair<double, int> { 48000.0, 0 }, std::pair<double, int> { 96000.0, 0 },
+                                           std::pair<double, int> { 48000.0, 45 }, std::pair<double, int> { 96000.0, 45 } })
+        {
+            const auto renderHead = [&] (int head)
+            {
+                StripFixture f;
+                f.reverb = 0.0f;
+                for (auto& h : f.heads)
+                    h.on = 0.0f;
+                f.heads[(size_t) head].on = 1.0f;
+                ChannelStrip strip;
+                strip.setParams (f.params());
+                strip.prepare (rate, 256);
+                auto& player = strip.dumblePlayer();
+                if (auto model = pack.load (NamPack::dumble, voice, player.modelRate(), player.modelBlockSize()))
+                {
+                    float inGain = 1.0f, outGain = 1.0f;
+                    namLevels (*model, inGain, outGain);
+                    const int d = namDelay (*model, player.modelRate(), player.modelBlockSize(), inGain);
+                    player.post (std::move (model), inGain, outGain, d);
+                }
+                waitForCabinets (strip, 256);
+                std::vector<float> in ((size_t) (rate * 0.5), 0.0f);
+                juce::Random rng (7);
+                for (int i = 0; i < (int) (rate * 0.1); ++i)   // a quiet noise burst: one clear peak to line up on
+                    in[(size_t) (rate * 0.1) + (size_t) i] = 0.03f * (rng.nextFloat() * 2.0f - 1.0f);
+                std::vector<float> l (in.size()), r (in.size());
+                for (size_t s = 0; s < in.size(); s += 256)
+                    strip.process (in.data() + s, l.data() + s, r.data() + s, (int) std::min<size_t> (256, in.size() - s));
+                return l;
+            };
+            const auto twoRock = renderHead (1), dumbleOut = renderHead (2);
+            int bestLag = 0;
+            double best = -1.0;
+            for (int lag = -200; lag <= 200; ++lag)
+            {
+                double c = 0.0;
+                for (size_t i = 300; i + 300 < twoRock.size(); ++i)
+                    c += (double) twoRock[i] * dumbleOut[(size_t) ((int) i + lag)];
+                if (std::abs (c) > best)
+                {
+                    best = std::abs (c);
+                    bestLag = lag;
+                }
+            }
+            std::snprintf (buf, sizeof buf, "%.0f kHz, voice %d: the Dumble %+d samples from the Two-Rock", rate / 1000.0, voice, bestLag);
+            check ("heads are lined up", std::abs (bestLag) <= 5, buf);   // 0.1 ms: any cancellation above 5 kHz
+        }
+
+        // where the time goes at 96 kHz: each capture on its own (4 s of audio)
+        for (const auto& [group, index, label] : { std::tuple<int, int, const char*> { NamPack::dumble, 0, "Dumble" },
+                                                   std::tuple<int, int, const char*> { NamPack::ts9, 1, "TS9" },
+                                                   std::tuple<int, int, const char*> { NamPack::sd1, 5, "SD-1" } })
+        {
+            NamPlayer player;
+            player.prepare (96000.0, 256);
+            if (auto model = pack.load (group, index, player.modelRate(), player.modelBlockSize()))
+                player.post (std::move (model), 1.0f, 1.0f);
+            auto x = pluck (196.0, 96000 * 4);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            inBlocks (x, 256, [&] (float* d, int m) { player.process (d, m); });
+            const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+            std::printf ("      %s capture at 96 kHz: %.0f%% of one core\n", label, ms / 40.0);
+            player.collectGarbage();
+        }
+
+        // the full rig as the app runs it: three heads, recorded cabinets and spring tank, at small and large blocks,
+        // and at 96 kHz with the TS9 and SD-1 captures on as well
         const auto irFile = juce::File::getCurrentWorkingDirectory().getChildFile ("Assets/private-ir/irs.bin");
         if (! irFile.existsAsFile())
             return;
         juce::MemoryBlock irData;
         irFile.loadFileAsData (irData);
         IRPack irs (irData.getData(), irData.getSize());
-        for (int block : { 128, 512 })
+        for (const auto& [rate, block] : { std::pair<double, int> { 48000.0, 128 }, std::pair<double, int> { 48000.0, 512 },
+                                           std::pair<double, int> { 96000.0, 256 } })
         {
             StripFixture f;
             for (auto& h : f.heads)
                 h.on = 1.0f;
+            const bool pedals = rate > 50000.0;
+            if (pedals)
+            {
+                f.tsOn = 1.0f;
+                f.odOn = 1.0f;
+            }
             ChannelStrip strip;
             strip.setParams (f.params());
-            strip.prepare (sr, block);
+            strip.prepare (rate, block);
+            if (pedals)
+                for (auto [player, group, index] : { std::tuple<NamPlayer*, int, int> { &strip.ts9Player(), NamPack::ts9, 1 },
+                                                     std::tuple<NamPlayer*, int, int> { &strip.sd1Player(), NamPack::sd1, 5 } })
+                    if (auto model = pack.load (group, index, player->modelRate(), player->modelBlockSize()))
+                    {
+                        float inGain = 1.0f, outGain = 1.0f;
+                        namLevels (*model, inGain, outGain, false);
+                        player->post (std::move (model), inGain, outGain);
+                    }
             for (int h = 0; h < 3; ++h)
             {
                 juce::AudioBuffer<float> ir;
@@ -1108,7 +1313,7 @@ namespace
                 if (irs.springTank (5, 5, ir, rate))
                     strip.postIR (ChannelStrip::springTank, std::move (ir), rate);
             }
-            if (auto model = pack.load (NamPack::dumble, 0, sr, block))
+            if (auto model = pack.load (NamPack::dumble, 0, strip.dumblePlayer().modelRate(), strip.dumblePlayer().modelBlockSize()))
             {
                 float inGain = 1.0f, outGain = 1.0f;
                 namLevels (*model, inGain, outGain);
@@ -1121,13 +1326,16 @@ namespace
                 strip.process (z.data(), l.data(), r.data(), block);
                 std::this_thread::sleep_for (std::chrono::milliseconds (1));
             }
-            const auto in = pluck (196.0, (int) (sr * 4.0));
+            const auto in = pluck (196.0, (int) (rate * 4.0));
             std::vector<float> ol (in.size()), orr (in.size());
             const auto start = juce::Time::getMillisecondCounterHiRes();
             for (size_t s = 0; s + (size_t) block <= in.size(); s += (size_t) block)
                 strip.process (in.data() + s, ol.data() + s, orr.data() + s, block);
             const double ms = juce::Time::getMillisecondCounterHiRes() - start;
-            std::printf ("      full rig, %d-sample blocks: %.0f ms for 4 s of audio = %.0f%% of one core\n", block, ms, ms / 40.0);
+            std::printf ("      full rig%s, %.0f kHz, %d-sample blocks: %.0f ms for 4 s of audio = %.0f%% of one core\n",
+                         pedals ? " + TS9 + SD-1" : "", rate / 1000.0, block, ms, ms / 40.0);
+            if (pedals)
+                check ("full rig at 96 kHz keeps up easily", allFinite (ol) && ms / 40.0 < 70.0, "well within one core");
             strip.collectGarbage();
         }
     }

@@ -9,6 +9,18 @@ int main (int argc, char** argv)
     folder.createDirectory();
 
     GuitarDriveProcessor proc;
+
+    // GuitarDriveSnapshot <folder> <app .settings file>: restore the standalone app's saved session first, as it does
+    if (argc >= 3)
+    {
+        juce::PropertiesFile::Options options;
+        juce::PropertiesFile settings (juce::File (juce::String (argv[2])), options);
+        juce::MemoryBlock data;
+        if (data.fromBase64Encoding (settings.getValue ("filterState")) && data.getSize() > 0)
+            proc.setStateInformation (data.getData(), (int) data.getSize());
+        std::printf ("restored session: preset \"%s\"\n", proc.presets.currentName().toRawUTF8());
+    }
+
     std::unique_ptr<juce::AudioProcessorEditor> ed (proc.createEditor());
     auto* editor = dynamic_cast<GuitarDriveEditor*> (ed.get());
     if (editor == nullptr)

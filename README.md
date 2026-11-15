@@ -48,7 +48,7 @@ captures of a Dumble, a TS9 and a Boss SD-1.
   | T | tuner |
   | Space | metronome |
 
-The captures are recorded at 48 kHz and aren't resampled: run your audio interface at 48 kHz.
+**Sample rate: 48 kHz is the best setting.** The captures and IRs were all recorded at 48 kHz, and the Fender and Two-Rock run at 192 kHz inside at either rate, so 96 kHz sounds the same but takes about twice the CPU (roughly 17% of one core at 48 kHz, 45% at 96 kHz, with everything on). 96 kHz still works: the captures then run at their own 48 kHz inside, and the heads are lined up so they sum without phase cancellation.
 
 ## Build (Windows)
 
