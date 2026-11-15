@@ -1,4 +1,4 @@
-// Offline checks of the audio code: feeds test signals through each effect and measures the result.
+﻿// Offline checks of the audio code: feeds test signals through each effect and measures the result.
 // Build with -DGUITARDRIVE_BUILD_TESTS=ON, target GuitarDriveTests. Exit code is the number of failures.
 #include <cmath>
 #include <cstdio>
@@ -11,6 +11,7 @@
 #include "NamCapture.h"
 #include "NAM/dsp.h"
 #include <thread>
+#include <tuple>
 #include "ChannelStrip.h"
 #include "Effects.h"
 #include "Logo.h"
@@ -956,11 +957,33 @@ namespace
         juce::MemoryBlock data;
         file.loadFileAsData (data);
         NamPack pack (data.getData(), data.getSize());
-        std::snprintf (buf, sizeof buf, "%d Dumble captures (first %s), %d TS9", pack.count (NamPack::dumble),
-                       pack.name (NamPack::dumble, 0).toRawUTF8(), pack.count (NamPack::ts9));
-        check ("NAM pack: loads", pack.isValid() && pack.count (NamPack::dumble) > 10 && pack.count (NamPack::ts9) == 4, buf);
+        std::snprintf (buf, sizeof buf, "%d Dumble captures (first %s), %d TS9, %d SD-1", pack.count (NamPack::dumble),
+                       pack.name (NamPack::dumble, 0).toRawUTF8(), pack.count (NamPack::ts9), pack.count (NamPack::sd1));
+        check ("NAM pack: loads", pack.isValid() && pack.count (NamPack::dumble) > 10 && pack.count (NamPack::ts9) == 4 && pack.count (NamPack::sd1) == 9, buf);
         if (! pack.isValid())
             return;
+
+        // pedal captures keep their real output level: how much louder than the guitar do they come out?
+        for (const auto& [group, index, label] : { std::tuple<int, int, const char*> { NamPack::ts9, 1, "TS9 classic (D3, L7)" },
+                                                   std::tuple<int, int, const char*> { NamPack::sd1, 0, "SD-1 boost I" },
+                                                   std::tuple<int, int, const char*> { NamPack::sd1, 8, "SD-1 drive VI" } })
+        {
+            NamPlayer player;
+            player.prepare (sr, 256);
+            if (auto model = pack.load (group, index, sr, 256))
+            {
+                float inGain = 1.0f, outGain = 1.0f;
+                namLevels (*model, inGain, outGain, false);
+                player.post (std::move (model), inGain, outGain);
+            }
+            auto x = pluck (196.0, (int) sr);
+            const double before = rms (x, 0, (int) sr);
+            inBlocks (x, 256, [&] (float* d, int n) { player.process (d, n); });
+            const double change = db (rms (x, 0, (int) sr) / before);
+            std::snprintf (buf, sizeof buf, "%s: %+.1f dB", label, change);
+            check ("NAM: pedal capture at a pedal-like level", allFinite (x) && change > -12.0 && change < 24.0, buf);
+            player.collectGarbage();
+        }
 
         // one strip with only the given head on, the Dumble fed its KLEAN capture
         auto render = [&] (int head, double& seconds)

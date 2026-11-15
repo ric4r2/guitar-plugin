@@ -573,8 +573,19 @@ public:
         setColour (juce::TextEditor::highlightColourId, Palette::amber.withAlpha (0.35f));
         setColour (juce::TextEditor::highlightedTextColourId, Palette::amber);
         setColour (juce::CaretComponent::caretColourId, Palette::amber);
-        onReturnKey = [this] { commit(); giveAwayKeyboardFocus(); };
-        onFocusLost = [this] { commit(); };
+        // It only takes the keyboard while you type in it: otherwise the cursor sat here and the shortcut keys
+        // never reached the rest of the program.
+        setWantsKeyboardFocus (false);
+        onReturnKey = [this] { commit(); handBackKeyboard(); };
+        onEscapeKey = [this] { setText (juce::String (value), false); handBackKeyboard(); };
+        onFocusLost = [this] { commit(); setWantsKeyboardFocus (false); };
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        setWantsKeyboardFocus (true);
+        grabKeyboardFocus();
+        juce::TextEditor::mouseDown (e);
     }
 
     std::function<void (int)> onUserValue;   // called when the user typed or nudged a new value
@@ -607,6 +618,15 @@ public:
     }
 
 private:
+    void handBackKeyboard()
+    {
+        setWantsKeyboardFocus (false);
+        if (auto* editor = findParentComponentOfClass<juce::AudioProcessorEditor>())
+            editor->grabKeyboardFocus();
+        else
+            giveAwayKeyboardFocus();
+    }
+
     void nudge (int amount)
     {
         value = juce::jlimit (minValue, maxValue, value + amount);

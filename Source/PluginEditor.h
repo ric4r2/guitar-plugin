@@ -133,7 +133,7 @@ private:
         std::vector<std::unique_ptr<KnobUI>> knobs;
         std::unique_ptr<JewelSwitch> power;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAttach;
-        juce::Rectangle<int> body, grille, panel, display;
+        juce::Rectangle<int> body, grille, panel;
         juce::Image tolexImage, grilleImage;
     };
 

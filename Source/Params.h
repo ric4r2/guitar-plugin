@@ -75,9 +75,6 @@ namespace Params
     // Keeps stacked pedals from jumping in volume (a setting, not part of presets)
     inline constexpr const char* autoLevel = "auto_level";
 
-    // the same pedals, with the overdrive shown as the TS9 when its captures are built in
-    inline const std::vector<PedalDef>& prePedalsTs9();
-
     // The wah has its own view: a treadle (position) with an engage switch, plus an auto-wah box
     // whose switch turns the envelope-following mode on.
     inline constexpr const char* wahOn = "wah_on";
@@ -157,16 +154,4 @@ namespace Params
     inline constexpr const char* metroNote = "metro_note";     // choice: which note value gets the pulse (2, 4, 8, 16)
     inline constexpr const char* metroVol = "metro_vol";
 
-    inline const std::vector<PedalDef>& prePedalsTs9()
-    {
-        static const std::vector<PedalDef> defs = []
-        {
-            auto copy = prePedals();
-            for (auto& d : copy)
-                if (juce::String (d.onId) == "od_on")
-                    d.title = "TS9";
-            return copy;
-        }();
-        return defs;
-    }
 }

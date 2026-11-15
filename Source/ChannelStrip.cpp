@@ -65,9 +65,11 @@ void ChannelStrip::prepare (double sampleRate, int maxBlockSize)
     comp.prepare (sampleRate);
     tubeScreamer.prepare (sampleRate, maxBlockSize);
     overdrive.prepare (sampleRate, maxBlockSize);
-    ts9.prepare (sampleRate, maxBlockSize);
-    ts9Tone.prepare ({ sampleRate, (juce::uint32) maxBlockSize, 1 });
-    lastTs9Tone = -1.0f;
+    for (auto* p : { &ts9, &sd1 })
+        p->prepare (sampleRate, maxBlockSize);
+    for (auto* f : { &ts9Tone, &sd1Tone })
+        f->prepare ({ sampleRate, (juce::uint32) maxBlockSize, 1 });
+    lastTs9Tone = lastSd1Tone = -1.0f;
     wahSwitch.prepare (sampleRate, params.wahOn->load() > 0.5f);
     compSwitch.prepare (sampleRate, params.compOn->load() > 0.5f);
     tsSwitch.prepare (sampleRate, params.tsOn->load() > 0.5f);
@@ -178,6 +180,7 @@ void ChannelStrip::collectGarbage()
         delete o.exchange (nullptr);
     dumble.player.collectGarbage();
     ts9.collectGarbage();
+    sd1.collectGarbage();
 }
 
 void ChannelStrip::takeNewIRs()
@@ -215,7 +218,9 @@ void ChannelStrip::reset()
     tubeScreamer.reset();
     overdrive.reset();
     ts9.reset();
+    sd1.reset();
     ts9Tone.reset();
+    sd1Tone.reset();
     reverbDuck.reset();
     spring.reset();
     springConv.reset();
@@ -267,6 +272,22 @@ void ChannelStrip::runCircuit (int index, float* x, int n)
     });
 }
 
+void ChannelStrip::runPedalCapture (NamPlayer& player, juce::dsp::IIR::Filter<float>& tone, float& lastTone,
+                                    float toneKnob, float levelKnob, float* x, int n)
+{
+    player.process (x, n);
+    if (toneKnob != lastTone)   // 5 = as captured
+    {
+        tone.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf (sr, 1500.0, 0.6f,
+                                juce::Decibels::decibelsToGain (knobToDb (toneKnob, 1.6f)));
+        lastTone = toneKnob;
+    }
+    float* chans[1] = { x };
+    juce::dsp::AudioBlock<float> block (chans, 1, (size_t) n);
+    tone.process (juce::dsp::ProcessContextReplacing<float> (block));
+    juce::FloatVectorOperations::multiply (x, juce::Decibels::decibelsToGain (knobToDb (levelKnob, 2.4f)), n);
+}
+
 void ChannelStrip::runDumble (float* x, int n)
 {
     const auto& hp = params.heads[2];
@@ -310,6 +331,7 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     takeNewIRs();
     dumble.player.update();
     ts9.update();
+    sd1.update();
 
     gate.process (outL, n, params.gate->load());
     shifter.process (outL, n, params.trans->load());
@@ -325,28 +347,17 @@ void ChannelStrip::process (const float* in, float* outL, float* outR, int n)
     });
     runPedal (tsSwitch, params.tsOn->load() > 0.5f, outL, n, [&]
     {
-        tubeScreamer.process (outL, n, params.tsDrive->load(), params.tsTone->load(), params.tsLevel->load());
+        if (ts9.hasModel())   // the TS9 captures
+            runPedalCapture (ts9, ts9Tone, lastTs9Tone, params.tsTone->load(), params.tsLevel->load(), outL, n);
+        else                  // the TS808 circuit
+            tubeScreamer.process (outL, n, params.tsDrive->load(), params.tsTone->load(), params.tsLevel->load());
     });
     runPedal (odSwitch, params.odOn->load() > 0.5f, outL, n, [&]
     {
-        if (! ts9.hasModel())
-        {
+        if (sd1.hasModel())   // the Boss SD-1 captures
+            runPedalCapture (sd1, sd1Tone, lastSd1Tone, params.odTone->load(), params.odLevel->load(), outL, n);
+        else
             overdrive.process (outL, n, params.odDrive->load(), params.odTone->load(), params.odLevel->load());
-            return;
-        }
-        // TS9 captures: DRIVE picks the capture (done by the loading thread), TONE tilts it, LEVEL sets the output
-        ts9.process (outL, n);
-        const float tone = params.odTone->load();
-        if (tone != lastTs9Tone)
-        {
-            ts9Tone.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf (sr, 1500.0, 0.6f,
-                                       juce::Decibels::decibelsToGain (knobToDb (tone, 1.6f)));
-            lastTs9Tone = tone;
-        }
-        float* chans[1] = { outL };
-        juce::dsp::AudioBlock<float> block (chans, 1, (size_t) n);
-        ts9Tone.process (juce::dsp::ProcessContextReplacing<float> (block));
-        juce::FloatVectorOperations::multiply (outL, juce::Decibels::decibelsToGain (knobToDb (params.odLevel->load(), 2.4f)), n);
     });
 
     // Auto level, part 1: the pedals' output follows the gain worked out at the end of the last block

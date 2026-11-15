@@ -122,6 +122,13 @@ int GuitarDriveProcessor::ts9IndexFor (float driveKnob) const
     return best;
 }
 
+int GuitarDriveProcessor::sd1IndexFor (float driveKnob) const
+{
+    // DRIVE sweeps the captures in order: the three boosts, then drive I to VI
+    const int n = namPack != nullptr ? namPack->count (NamPack::sd1) : 0;
+    return n <= 1 ? 0 : juce::jlimit (0, n - 1, (int) std::lround (driveKnob / 10.0f * (float) (n - 1)));
+}
+
 juce::String GuitarDriveProcessor::dumbleVoiceName (float knob) const
 {
     if (! hasDumble())
@@ -146,7 +153,7 @@ GuitarDriveProcessor::Loader::~Loader()
 
 void GuitarDriveProcessor::Loader::run()
 {
-    int lastPrepare = -1, lastDwell = -1, lastTone = -1, lastDumble = -1, lastTs9 = -1;
+    int lastPrepare = -1, lastDwell = -1, lastTone = -1, lastDumble = -1, lastTs9 = -1, lastSd1 = -1;
     std::array<float, Params::numHeads> lastMic { -1.0f, -1.0f, -1.0f };
     auto& strip = owner.strip;
 
@@ -193,7 +200,7 @@ void GuitarDriveProcessor::Loader::run()
                     if (auto model = owner.namPack->load (group, index, strip.getSampleRate(), strip.getMaxBlockSize()))
                     {
                         float inGain = 1.0f, outGain = 1.0f;
-                        namLevels (*model, inGain, outGain);
+                        namLevels (*model, inGain, outGain, group == NamPack::dumble);   // pedals keep their own level
                         player.post (std::move (model), inGain, outGain);
                     }
                 };
@@ -203,11 +210,17 @@ void GuitarDriveProcessor::Loader::run()
                     loadInto (strip.dumblePlayer(), NamPack::dumble, dumble);
                     lastDumble = dumble;
                 }
-                const int ts9 = owner.ts9IndexFor (owner.raw ("od_drive")->load());
+                const int ts9 = owner.ts9IndexFor (owner.raw ("ts_drive")->load());
                 if (owner.hasTs9() && (fresh || ts9 != lastTs9))
                 {
                     loadInto (strip.ts9Player(), NamPack::ts9, ts9);
                     lastTs9 = ts9;
+                }
+                const int sd1 = owner.sd1IndexFor (owner.raw ("od_drive")->load());
+                if (owner.hasSd1() && (fresh || sd1 != lastSd1))
+                {
+                    loadInto (strip.sd1Player(), NamPack::sd1, sd1);
+                    lastSd1 = sd1;
                 }
             }
         }

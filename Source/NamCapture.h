@@ -10,7 +10,7 @@ namespace nam { class DSP; }
 class NamPack
 {
 public:
-    enum Group { dumble = 0, ts9 = 1 };
+    enum Group { dumble = 0, ts9 = 1, sd1 = 2 };
 
     NamPack (const void* data, size_t size);
     bool isValid() const { return ! entries.empty(); }
@@ -61,5 +61,6 @@ private:
     std::vector<float> in, a, b;
 };
 
-// the input and output gains for a capture, from the levels written into it
-void namLevels (nam::DSP& model, float& inputGain, float& outputGain);
+// The input and output gains for a capture, from the levels written into it. Amps are brought to one loudness;
+// pedals keep their real output level (a boost should be louder).
+void namLevels (nam::DSP& model, float& inputGain, float& outputGain, bool matchLoudness = true);

@@ -1,4 +1,4 @@
-# How the amp and pedals are modelled
+﻿# How the amp and pedals are modelled
 
 ## The rig: a reverb unit feeding three amps
 
@@ -22,7 +22,7 @@ The Dumble's controls:
 * **VOLUME** drives the capture by up to 12 dB either way.
 * **TREBLE / MIDDLE / BASS** shape it further (5 = as captured).
 
-The overdrive pedal becomes a **TS9** when its captures are built in. DRIVE picks the capture nearest the knob (Drive 1, 3, 6 or 9), TONE tilts it and LEVEL sets the output.
+With the captures built in, the **Tube Screamer** plays the Ibanez TS9 captures (DRIVE picks the one nearest the knob: Drive 1, 3, 6 or 9) and the **Overdrive** plays the Boss SD-1 captures (DRIVE sweeps Boost I-III, then Drive I-VI). TONE tilts the sound and LEVEL sets the output; pedal captures keep their real output level. Without captures they fall back to the TS808 circuit model and the built-in overdrive.
 
 NAM captures play through the official Neural Amp Modeler engine (NeuralAmpModelerCore, MIT license, with Eigen, MPL-2.0), which the build downloads. `tools/pack_nam.py <folder>` packs the TONE3000 zips into the git-ignored `Assets/private-ir/nam.bin`. TONE3000's license allows using the captures but not sharing them, so don't share a build that contains them. The captures expect 48 kHz: run the interface at 48 kHz for them to sound exactly as captured.
 

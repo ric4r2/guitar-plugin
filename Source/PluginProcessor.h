@@ -52,6 +52,8 @@ public:
     // NAM captures built into this copy (personal builds only)
     bool hasDumble() const { return namPack != nullptr && namPack->count (NamPack::dumble) > 0; }
     bool hasTs9() const { return namPack != nullptr && namPack->count (NamPack::ts9) > 0; }
+    bool hasSd1() const { return namPack != nullptr && namPack->count (NamPack::sd1) > 0; }
+    int sd1IndexFor (float driveKnob) const;
     juce::String dumbleVoiceName (float knob) const;   // the capture the Dumble's VOICE knob points at
     juce::String ts9CaptureName (float driveKnob) const;
     int dumbleIndexFor (float knob) const;

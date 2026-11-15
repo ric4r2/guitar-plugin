@@ -92,11 +92,17 @@ std::unique_ptr<nam::DSP> NamPack::load (int group, int index, double sampleRate
     }
 }
 
-void namLevels (nam::DSP& model, float& inputGain, float& outputGain)
+void namLevels (nam::DSP& model, float& inputGain, float& outputGain, bool matchLoudness)
 {
     // The plugin works in volts: 1.0 is 1 V peak at the input jack (about -0.8 dBu as a sine). A capture records which
     // analogue level its digital full scale stood for, so the guitar reaches it at the level it was trained at.
     inputGain = model.HasInputLevel() ? (float) juce::Decibels::decibelsToGain (-0.8 - model.GetInputLevel()) : 0.25f;
+    if (! matchLoudness)
+    {
+        // back to volts, using the analogue level the capture's output stood for
+        outputGain = model.HasOutputLevel() ? (float) juce::Decibels::decibelsToGain (model.GetOutputLevel() + 0.8) : 1.0f / inputGain;
+        return;
+    }
     // Captures come out at very different levels: bring each to the same loudness.
     outputGain = model.HasLoudness() ? (float) juce::Decibels::decibelsToGain (-14.0 - model.GetLoudness()) : 1.0f;
 }

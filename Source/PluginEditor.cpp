@@ -330,10 +330,15 @@ AmpView::AmpView (GuitarDriveProcessor& p, const juce::Image& logoImage)
         head.knobs.back()->slider.setTooltip ("Cabinet microphones: 0 dark, 5 balanced, 10 clean and bright.");
     }
 
-    // the Dumble's VOICE knob walks through the captures: show which one, by name
+    // the Dumble's VOICE knob walks through the captures; hovering it tells which one
     auto& voice = heads[2].knobs.front()->slider;
-    voice.setTooltip ("VOICE: the Dumble captures, from the cleanest (KLEAN) to the most driven.");
-    voice.onValueChange = [this] { repaint (heads[2].display.expanded (4)); };
+    const auto updateVoiceTip = [this, &voice]
+    {
+        voice.setTooltip (proc.hasDumble() ? "VOICE: " + proc.dumbleVoiceName ((float) voice.getValue()) + " (cleanest at 0, most driven at 10)"
+                                           : juce::String ("VOICE: no Dumble captures in this build"));
+    };
+    voice.onValueChange = updateVoiceTip;
+    updateVoiceTip();
     if (! proc.hasDumble())
         for (auto& k : heads[2].knobs)
             k->slider.setEnabled (false);
@@ -378,7 +383,6 @@ void AmpView::resized()
         auto controls = head.panel.reduced (6, 6);
         auto top = controls.removeFromTop (24);
         head.power->setBounds (top.removeFromRight (34).withSizeKeepingCentre (30, 30));
-        head.display = top.reduced (4, 2);
 
         const int count = (int) head.knobs.size();
         const int col = controls.getWidth() / count;
@@ -524,23 +528,6 @@ void AmpView::paintHead (juce::Graphics& g, int index)
     for (auto corner : { pl.getTopLeft() + juce::Point<float> (8.0f, 8.0f), pl.getBottomLeft() + juce::Point<float> (8.0f, -8.0f) })
         drawScrew (g, corner, 2.6f);
 
-    // what the head is playing: the amp's circuit, or the Dumble capture the VOICE knob points at
-    const auto d = head.display.toFloat();
-    g.setColour (juce::Colour (0xff060807));
-    g.fillRoundedRectangle (d, 4.0f);
-    g.setColour (Palette::brass.withAlpha (0.5f));
-    g.drawRoundedRectangle (d, 4.0f, 1.0f);
-    juce::String info;
-    if (index == 0)
-        info = "TWIN REVERB  -  CIRCUIT MODEL";
-    else if (index == 1)
-        info = "CLASSIC CLEAN  -  CIRCUIT MODEL";
-    else
-        info = proc.hasDumble() ? "ODS #102  -  " + proc.dumbleVoiceName ((float) heads[2].knobs.front()->slider.getValue())
-                                : "NO CAPTURES IN THIS BUILD";
-    g.setColour (on ? Palette::amber : Palette::amber.withAlpha (0.35f));
-    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    g.drawText (info, d.reduced (8.0f, 0.0f).toNearestInt(), juce::Justification::centredLeft, true);
 }
 
 // ---------------------------------------------------------------- pedals
@@ -1323,7 +1310,7 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
 
     root.addAndMakeVisible (ampView);
     wahView = std::make_unique<WahView> (p.apvts, 0);
-    preBoard = std::make_unique<PedalBoard> (p.apvts, p.hasTs9() ? Params::prePedalsTs9() : Params::prePedals(), 0);
+    preBoard = std::make_unique<PedalBoard> (p.apvts, Params::prePedals(), 0);
     eqView = std::make_unique<EqView> (p.apvts, 0);
     postBoard = std::make_unique<PedalBoard> (p.apvts, Params::postPedals(), 0);
     for (juce::Component* c : { (juce::Component*) wahView.get(), (juce::Component*) preBoard.get(),
@@ -1341,8 +1328,7 @@ GuitarDriveEditor::GuitarDriveEditor (GuitarDriveProcessor& p)
     {
         for (auto* child : c.getChildren())
         {
-            if (dynamic_cast<juce::TextEditor*> (child) == nullptr)
-                child->setWantsKeyboardFocus (false);
+            child->setWantsKeyboardFocus (false);   // the tempo boxes take it only while clicked (see NumberBox)
             noFocus (*child);
         }
     };

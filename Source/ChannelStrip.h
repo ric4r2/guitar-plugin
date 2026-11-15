@@ -100,9 +100,10 @@ public:
     double getSampleRate() const { return sr; }
     int getMaxBlockSize() const { return maxBlock; }
 
-    // NAM captures: the Dumble head, and the TS9 that replaces the built-in overdrive once it has a capture
+    // NAM captures: the Dumble head; the TS9 plays the Tube Screamer and the SD-1 the Overdrive once they have a capture
     NamPlayer& dumblePlayer() { return dumble.player; }
     NamPlayer& ts9Player() { return ts9; }
+    NamPlayer& sd1Player() { return sd1; }
 
     // the cabinets load on a background thread; true once all are in use
     bool cabinetsReady() const;
@@ -127,9 +128,11 @@ private:
     fx::Compressor comp;
     fx::TubeScreamer tubeScreamer;
     fx::Overdrive overdrive;
-    NamPlayer ts9;
-    juce::dsp::IIR::Filter<float> ts9Tone;
-    float lastTs9Tone = -1.0f;
+    // pedal captures: DRIVE picks the capture (the loading thread does that), TONE tilts it, LEVEL sets its output
+    NamPlayer ts9, sd1;
+    juce::dsp::IIR::Filter<float> ts9Tone, sd1Tone;
+    float lastTs9Tone = -1.0f, lastSd1Tone = -1.0f;
+    void runPedalCapture (NamPlayer& player, juce::dsp::IIR::Filter<float>& tone, float& lastTone, float toneKnob, float levelKnob, float* x, int n);
     fx::PedalSwitch wahSwitch, compSwitch, tsSwitch, odSwitch;
     std::vector<float> dryScratch, levelRef;
 
