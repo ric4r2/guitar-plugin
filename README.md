@@ -83,28 +83,6 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
-### The recorded IRs and NAM captures (private)
-
-`Assets/private-ir/` holds the packed sounds the build embeds into the program:
-
-- `irs.bin`: the cabinet IRs and the 100 spring tank IRs, packed and compressed
-- `nam.bin`: the Dumble, TS9 and SD-1 captures, packed and compressed
-- `source/`: the original downloads they were made from, still zipped. The build doesn't use them; they're only
-  there so the packs can be remade. The Fender Spring Reverb Tank zip is split into `.001`–`.005` parts, because
-  GitHub doesn't accept files over 100 MB. If the `.bin` files are ever missing, `build.cmd` remakes them from these
-  when Python is installed.
-
-They are licensed for personal use only. That's why this repository is **private**: don't make it public or share
-builds made with them. Without the two `.bin` files the plugin still builds, with built-in cabinet models, the
-algorithmic spring and the circuit-modelled pedals instead.
-
-To rebuild the packs (only needed after changing the packing scripts or the downloads):
-
-```
-python tools/pack_irs.py
-python tools/pack_nam.py
-```
-
 ### ASIO (optional, for low latency in the standalone app)
 
 Download Steinberg's ASIO SDK yourself (it is not included here) and point CMake at its `ASIOSDK` folder:
@@ -137,5 +115,4 @@ build/GuitarDriveTests_artefacts/Release/GuitarDriveTests.exe
 ## License
 
 The code is under the GNU Affero General Public License v3.0 (see [LICENSE](LICENSE)), the license JUCE is used
-under. The recorded IRs and NAM captures in `Assets/private-ir/` are not covered by it: they belong to their makers and
-are for personal use only.
+under.
