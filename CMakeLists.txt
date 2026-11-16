@@ -38,6 +38,8 @@ juce_add_plugin(GuitarDrive
     PLUGIN_CODE Gdrv
     FORMATS VST3 Standalone
     PRODUCT_NAME "Joe Garcia Rig"
+    ICON_BIG Assets/icon.png          # made by tools/make_icon.py from the logo
+    ICON_SMALL Assets/icon-small.png
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     COPY_PLUGIN_AFTER_BUILD FALSE)  # TRUE copies to Program Files\Common Files\VST3 (needs admin)
