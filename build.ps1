@@ -110,7 +110,14 @@ if ($Clean -and (Test-Path $buildDir)) {
 }
 
 Step 'Configuring (the first time, this downloads JUCE, the NAM engine and Eigen)'
-$configure = @('-S', $root, '-B', $buildDir, '-G', 'Visual Studio 17 2022', '-A', 'x64')
+# JUCE has files deep enough to pass Windows' old 260-character path limit when the repository sits in a deep folder:
+# let git handle long paths (for this build only, nothing is changed globally) and keep the downloads in a short folder,
+# which also survives -Clean, so JUCE isn't downloaded again.
+$env:GIT_CONFIG_COUNT = '1'
+$env:GIT_CONFIG_KEY_0 = 'core.longpaths'
+$env:GIT_CONFIG_VALUE_0 = 'true'
+$deps = Join-Path $env:LOCALAPPDATA 'JoeGarciaRig\deps'
+$configure = @('-S', $root, '-B', $buildDir, '-G', 'Visual Studio 17 2022', '-A', 'x64', "-DFETCHCONTENT_BASE_DIR=$deps")
 if ($Tests) { $configure += '-DGUITARDRIVE_BUILD_TESTS=ON' }
 & $cmake @configure
 if ($LASTEXITCODE -ne 0) { Fail 'Configuring failed (see above). If a download failed, check the internet connection and run this again.' }

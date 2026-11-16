@@ -52,29 +52,47 @@ captures of a Dumble, a TS9 and a Boss SD-1.
 
 ## Build (Windows)
 
-You need Git, CMake and the Visual Studio 2022 C++ build tools. JUCE, the NAM engine and Eigen are downloaded
-automatically.
+One command, on a new computer too: clone (or copy) the repository and run `build.cmd`, or double-click it.
 
 ```
 git clone https://github.com/ric4r2/guitar-plugin.git
 cd guitar-plugin
+build.cmd
+```
+
+The script checks for each tool and installs only the ones that are missing, with winget:
+- **Git**
+- **CMake** (it also uses the copy that comes with the build tools)
+- **The Visual Studio 2022 C++ build tools.** Installing these shows a Windows admin prompt and takes 10–20 minutes
+  the first time.
+
+Then it builds the standalone app and the VST3 into `build/GuitarDrive_artefacts/Release/`. CMake downloads JUCE, the
+NAM engine and Eigen on the first build.
+
+| Option | What it adds |
+| --- | --- |
+| `build.cmd -Install` | copies the VST3 to `Program Files\Common Files\VST3` for Ableton (asks for admin) and puts a shortcut to the app on the desktop |
+| `build.cmd -Tests` | builds and runs the DSP tests |
+| `build.cmd -Clean` | starts from an empty build folder |
+
+Everything the build needs is in this repository, including the recorded IRs and NAM captures, already packed: nothing
+has to be unzipped. If you'd rather do it by hand:
+
+```
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
-
-The standalone app and the VST3 end up under `build/GuitarDrive_artefacts/Release/`.
-
-Everything the build needs is in this repository, including the recorded IRs and NAM captures, so a fresh clone on a
-new computer builds the full plugin.
 
 ### The recorded IRs and NAM captures (private)
 
 `Assets/private-ir/` holds the packed sounds the build embeds into the program:
 
-- `irs.bin`: the cabinet IRs and the 100 spring tank IRs
-- `nam.bin`: the Dumble, TS9 and SD-1 captures
-- `source/`: the original downloads they were made from. The Fender Spring Reverb Tank zip is split into
-  `.001`–`.005` parts, because GitHub doesn't accept files over 100 MB.
+- `irs.bin`: the cabinet IRs and the 100 spring tank IRs, packed and compressed
+- `nam.bin`: the Dumble, TS9 and SD-1 captures, packed and compressed
+- `source/`: the original downloads they were made from, still zipped. The build doesn't use them; they're only
+  there so the packs can be remade. The Fender Spring Reverb Tank zip is split into `.001`–`.005` parts, because
+  GitHub doesn't accept files over 100 MB. If the `.bin` files are ever missing, `build.cmd` remakes them from these
+  when Python is installed.
 
 They are licensed for personal use only. That's why this repository is **private**: don't make it public or share
 builds made with them. Without the two `.bin` files the plugin still builds, with built-in cabinet models, the
